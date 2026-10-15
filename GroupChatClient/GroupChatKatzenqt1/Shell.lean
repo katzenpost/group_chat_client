@@ -54,6 +54,7 @@ def Msg.describe : Msg → String
   | .loaded chat job bytes => s!"{chat}: job {job}'s message: {(bytes.map (s!"{·.size} bytes")).getD "lost"}"
   | .substream chat job _ => s!"{chat}: made a substream for job {job}"
   | .wroteChunk chat job n _ => s!"{chat}: wrote box {n} of job {job}"
+  | .chunkIndexes chat job _ is => s!"{chat}: derived {is.length} indexes of job {job}'s substream"
   | .readChunk chat stream index o =>
     let what := match o with
       | .data p _ => s!"{p.size} bytes"

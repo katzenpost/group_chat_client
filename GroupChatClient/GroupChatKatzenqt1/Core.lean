@@ -65,6 +65,8 @@ inductive Action
   /-- Write the `n`th box of an upload, retrying until it is written: `wroteChunk`. -/
   | writeChunk (chat : String) (job : Nat) (n : Nat) (writeCap : ByteArray) (index : Index)
       (box : ByteArray)
+  /-- The indexes of `count` boxes after `start` of an upload's substream: `chunkIndexes`. -/
+  | chunkIndexes (chat : String) (job : Nat) (start : Index) (count : Nat)
   /-- Read a box of the substream a member's `I` box named: `readChunk`. -/
   | readChunk (chat : String) (stream : Key) (readCap : ByteArray) (index : Index)
 
@@ -100,6 +102,7 @@ inductive Msg
   | loaded (chat : String) (job : Nat) (bytes : Option ByteArray)
   | substream (chat : String) (job : Nat) (kp : Keypair)
   | wroteChunk (chat : String) (job : Nat) (n : Nat) (next : Index)
+  | chunkIndexes (chat : String) (job : Nat) (start : Index) (indexes : List Index)
   | readChunk (chat : String) (stream : Key) (index : Index) (outcome : ReadOutcome)
 
 /-- What is under way on the network; not saved, since a restart begins it again. -/
@@ -109,8 +112,14 @@ structure Flight where
   reading : List (String × Key) := []
   /-- Reads of each stream that found nothing, in a row. -/
   misses : List ((String × Key) × Nat) := []
-  /-- Uploads with a box being written or a substream being made, by chat and job. -/
+  /-- Uploads with a substream being made or indexes being derived, by chat and job. -/
   uploading : List (String × Nat) := []
+  /-- The index of each box of an upload from the first not yet written on, as far as derived. -/
+  ahead : List ((String × Nat) × List Index) := []
+  /-- The boxes of each upload being written. -/
+  chunksOut : List ((String × Nat) × Nat) := []
+  /-- Boxes of an upload written after one not yet written, with the index after each. -/
+  landed : List ((String × Nat) × (Nat × Index)) := []
   /-- Uploads whose message is being read from its file. -/
   loading : List (String × Nat) := []
   /-- Each upload's message, once made or read back. -/
@@ -352,20 +361,35 @@ def startInduction (c : Chat) : CoreM Chat := do
 def blobOf (chat : String) (job : Nat) : CoreM (Option ByteArray) :=
   return (← getFlight).blobs.lookup (chat, job)
 
-/-- Write the next box of each upload, making its substream or reading its message back first. -/
+/-- How many boxes of an upload are written at once. -/
+def window : Nat := 8
+
+/-- Write the next boxes of each upload, making its substream, reading its message back and
+deriving their indexes first. -/
 def startUploads (c : Chat) : CoreM Unit := do
   for j in c.jobs do
     let some u := j.upload | continue
     let f ← getFlight
-    if u.sent ≥ u.total || f.uploading.contains (c.name, j.id) then continue
+    let key := (c.name, j.id)
+    if u.sent ≥ u.total || f.uploading.contains key then continue
     if u.writeCap.size = 0 then
-      modifyFlight fun f => { f with uploading := (c.name, j.id) :: f.uploading }
+      modifyFlight fun f => { f with uploading := key :: f.uploading }
       emit (.substream c.name j.id)
       continue
     match ← blobOf c.name j.id with
     | some blob =>
-      modifyFlight fun f => { f with uploading := (c.name, j.id) :: f.uploading }
-      emit (.writeChunk c.name j.id u.sent u.writeCap u.next (Files.chunk blob u.boxSize u.sent))
+      let want := min window (u.total - u.sent)
+      let ahead := (f.ahead.lookup key).getD []
+      if ahead.length < want then
+        modifyFlight fun f => { f with uploading := key :: f.uploading }
+        emit (.chunkIndexes c.name j.id u.next (min (2 * window) (u.total - u.sent) - 1))
+        continue
+      for (index, i) in (ahead.take want).zipIdx do
+        let n := u.sent + i
+        let f ← getFlight
+        if f.chunksOut.contains (key, n) || f.landed.any fun l => l.1 == key && l.2.1 == n then continue
+        modifyFlight fun f => { f with chunksOut := (key, n) :: f.chunksOut }
+        emit (.writeChunk c.name j.id n u.writeCap index (Files.chunk blob u.boxSize n))
     | none =>
       unless f.loading.contains (c.name, j.id) do
         modifyFlight fun f => { f with loading := (c.name, j.id) :: f.loading }
@@ -547,15 +571,33 @@ def handle : Msg → CoreM Unit
     modifyFlight fun f => { f with uploading := f.uploading.erase (name, job) }
     withChat name fun c => return mapJob c job fun j =>
       { j with upload := j.upload.map ({ · with writeCap := kp.writeCap, next := kp.first }) }
-  | .wroteChunk name job n next => do
+  | .chunkIndexes name job start indexes => do
     modifyFlight fun f => { f with uploading := f.uploading.erase (name, job) }
+    withChat name fun c => do
+      if (c.jobs.find? (·.id == job)).any (·.upload.any (·.next == start)) then
+        modifyFlight fun f => { f with
+          ahead := ((name, job), start :: indexes) :: f.ahead.filter (·.1 != (name, job)) }
+      return c
+  | .wroteChunk name job n next => do
+    let key := (name, job)
+    modifyFlight fun f => { f with chunksOut := f.chunksOut.erase (key, n) }
     withChat name fun c => do
       let some j := c.jobs.find? (·.id == job) | return c
       let some u := j.upload | return c
-      unless u.sent == n do return c
-      let u := { u with sent := n + 1, next }
+      if n < u.sent then return c
+      modifyFlight fun f => { f with landed := (key, (n, next)) :: f.landed }
+      -- Count the boxes written in a row from the first not yet counted.
+      let mut u := u
+      let mut f ← getFlight
+      while true do
+        let some (_, (_, after)) := f.landed.find? fun l => l.1 == key && l.2.1 == u.sent | break
+        f := { f with landed := f.landed.filter (· != (key, (u.sent, after))),
+                      ahead := f.ahead.map fun (k, is) => if k == key then (k, is.drop 1) else (k, is) }
+        u := { u with sent := u.sent + 1, next := after }
+      modifyFlight fun _ => f
       if u.sent < u.total then return mapJob c job fun j => { j with upload := some u }
-      modifyFlight fun f => { f with blobs := f.blobs.filter (·.1 != (name, job)) }
+      modifyFlight fun f => { f with blobs := f.blobs.filter (·.1 != key), ahead := f.ahead.filter (·.1 != key),
+                                     landed := f.landed.filter (·.1 != key) }
       emit (.file name u.file none)
       return mapJob c job fun j =>
         { j with upload := some u, box := Files.indirection u.total (readCapOf u.writeCap) }
@@ -639,6 +681,9 @@ def handle : Msg → CoreM Unit
                             reading := f.reading.filter (·.1 != name),
                             misses := f.misses.filter (·.1.1 != name),
                             uploading := f.uploading.filter (·.1 != name),
+                            ahead := f.ahead.filter (·.1.1 != name),
+                            chunksOut := f.chunksOut.filter (·.1.1 != name),
+                            landed := f.landed.filter (·.1.1 != name),
                             loading := f.loading.filter (·.1 != name),
                             blobs := f.blobs.filter (·.1.1 != name),
                             fetched := f.fetched.filter (·.1.1 != name) }
