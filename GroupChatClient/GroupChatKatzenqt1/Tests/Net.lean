@@ -26,6 +26,8 @@ structure Net where
   queue : Array (Nat × Action) := #[]
   later : Array (Nat × Nat × Later) := #[]
   clock : Nat := 0
+  /-- Each member's files. -/
+  files : List (Nat × List (String × ByteArray)) := []
 
 abbrev NetM := StateT Net IO
 
@@ -42,7 +44,9 @@ def tick (world : IO.Ref Sim.World) : NetM Bool := do
   if h : 0 < n.queue.size then
     let (who, a) := n.queue[0]
     set { n with queue := n.queue.extract 1 n.queue.size }
-    match ← perform (backend world) a with
+    let (outcome, files) ← Store.withMemory ((n.files.lookup who).getD []) (perform (backend world) · a)
+    modify fun n => { n with files := (who, files) :: n.files.filter (·.1 != who) }
+    match outcome with
     | .done m => feed who m
     | .retry a ms => modify fun n => { n with later := n.later.push (n.clock + ms, who, .act a) }
     | .delay m ms => modify fun n => { n with later := n.later.push (n.clock + ms, who, .msg m) }

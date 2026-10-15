@@ -23,6 +23,7 @@ GroupChatClient/
     Daemon.lean, Sim.lean
     Persist/             how this protocol's state is saved
     State.lean           what a member keeps
+    Files.lean           files, and messages too long for a box
     Presentation.lean    how the app words and filters what the core says
     Core.lean            the pure state machine: step, resume
     Exec.lean            carrying out the core's actions

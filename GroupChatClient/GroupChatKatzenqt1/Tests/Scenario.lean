@@ -61,6 +61,8 @@ structure World where
   clock : Nat := 0
   held : List Nat := []
   epoch : Nat := 1
+  /-- Each member's files. -/
+  files : List (Nat × List (String × ByteArray)) := []
   /-- Each step after which a member's group did not load as it was saved. -/
   unsaved : Array String := #[]
 
@@ -96,7 +98,9 @@ def act : ScM Bool := do
   let some k := w.queue.findIdx? (!w.held.contains ·.1) | return false
   let some (i, a) := w.queue[k]? | return false
   set { w with queue := w.queue.eraseIdx! k }
-  match ← perform (Sim.backend w.sim) a with
+  let (outcome, files) ← Store.withMemory ((w.files.lookup i).getD []) (perform (Sim.backend w.sim) · a)
+  modify fun w => { w with files := (i, files) :: w.files.filter (·.1 != i) }
+  match outcome with
   | .done m => feed i m
   | .retry a ms => modify fun w => { w with later := w.later.push (w.clock + ms, i, .act a) }
   | .delay m ms => modify fun w => { w with later := w.later.push (w.clock + ms, i, .msg m) }

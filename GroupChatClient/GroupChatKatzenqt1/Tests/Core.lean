@@ -149,17 +149,6 @@ def failingWrites : TestM Unit := do
     runUntil world fun n => says n 1 "g" "eventually").run net
   check "a write that fails is tried again" ok
 
-def tooLong : TestM Unit := do
-  let (world, net) ← newNet 2 ["alice", "bob"]
-  let (ok, _) ← (do
-    feed 0 (.create "g")
-    discard <| runUntil world fun n => joined n 0 "g"
-    feed 0 (.send "g" (String.ofList (List.replicate 2000 'x')))
-    let n ← get
-    return (chatOf n 0 "g").any fun (c : Chat) =>
-      c.jobs.isEmpty && c.log.any (·.text == "that message is too long to send")).run net
-  check "a message too long for a box is refused" ok
-
 def backfill : TestM Unit := do
   let (world, net) ← newNet 2 ["alice", "bob"]
   let (ok, _) ← (do
@@ -207,7 +196,6 @@ def tests : TestM Unit := do
   removeAndLeave
   restart
   failingWrites
-  tooLong
   backfill
 
 end GroupChatClient.GroupChatKatzenqt1.Tests.CoreTests

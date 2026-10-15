@@ -18,6 +18,20 @@ open CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member
 open GroupChatClient.GroupChatKatzenqt1.Persist
 open GroupChatClient.GroupChatKatzenqt1.Persist.Persist
 
+/-- A message too long for a box, being written to a substream of its own. -/
+structure Upload where
+  /-- The file under the state directory that holds the message, until it is written. -/
+  file : String
+  /-- The most plaintext a box holds, which its boxes were cut to. -/
+  boxSize : Nat
+  total : Nat
+  /-- The substream's, once made. -/
+  writeCap : ByteArray := .empty
+  /-- Boxes written so far, and the index of the next. -/
+  sent : Nat := 0
+  next : Index := .empty
+  deriving Inhabited
+
 /-- A box to write to our own stream, in order. -/
 structure Job where
   id : Nat
@@ -29,10 +43,24 @@ structure Job where
   box : ByteArray
   /-- The conversation line it shows as. -/
   line : Option Nat := none
+  /-- For a message too long for a box: its substream, which is written first; `box` is then the
+  `I` box naming it. -/
+  upload : Option Upload := none
   deriving Inhabited
 
 inductive Status | pending | sent
   deriving DecidableEq, Inhabited
+
+/-- A file a line carries. -/
+structure Attachment where
+  /-- Its name, made safe. -/
+  name : String
+  /-- As katzenqt tags it: `image/png`, `audio/opus`, `arbitrary`. -/
+  filetype : String
+  size : Nat
+  /-- The file under the state directory that holds it. -/
+  file : String
+  deriving Inhabited, BEq
 
 /-- A line of a conversation. -/
 structure Line where
@@ -48,6 +76,7 @@ structure Line where
   /-- When it was said here, or read: milliseconds since the Unix epoch, by this machine's clock;
   `none` for a line saved before times were kept. -/
   time : Option Nat := none
+  attachment : Option Attachment := none
   deriving Inhabited
 
 /-- Joining a group through a contact voucher we minted. -/
@@ -68,6 +97,18 @@ structure Inducting where
   sealing : Bool := false
   deriving Inhabited
 
+/-- A message a member's `I` box announced, being read from its substream. Their stream is read
+no further until it is. -/
+structure Download where
+  stream : Key
+  /-- The `I` box, and the one after it. -/
+  index : Index
+  next : Index
+  readCap : ByteArray
+  /-- How many boxes the substream holds, when the writer said. -/
+  total : Option Nat
+  deriving Inhabited
+
 structure Chat where
   name : String
   writeCap : ByteArray := .empty
@@ -81,6 +122,7 @@ structure Chat where
   joining : Option Joining := none
   inducting : Option Inducting := none
   nextId : Nat := 0
+  downloads : List Download := []
   deriving Inhabited
 
 structure State where
@@ -106,9 +148,15 @@ def notice (c : Chat) (text : String) : Chat := (c.say fun id => { id, text }).2
 
 end Chat
 
+def slug (group : String) : String :=
+  String.ofList (group.toList.map fun ch => if ch.isAlphanum then ch else '_')
+
 /-- The file beside the state that holds the voucher code minted to join `group`. -/
-def voucherFile (group : String) : String :=
-  s!"voucher-{String.ofList (group.toList.map fun ch => if ch.isAlphanum then ch else '_')}.txt"
+def voucherFile (group : String) : String := s!"voucher-{slug group}.txt"
+
+/-- The files a conversation's lines carry. -/
+def Chat.files (c : Chat) : List String :=
+  c.log.filterMap (·.attachment.map (·.file)) ++ c.jobs.filterMap (·.upload.map (·.file))
 
 def State.chat? (s : State) (name : String) : Option Chat := s.chats.find? (·.name == name)
 
@@ -119,11 +167,22 @@ def State.setChat (s : State) (c : Chat) : State :=
 
 /-! ## Saving -/
 
-instance : Persist Job where
-  toTerm j := .TList #[toTerm j.id, toTerm j.token, toTerm j.index, toTerm j.box, toTerm j.line]
+instance : Persist Upload where
+  toTerm u := .TList #[toTerm u.file, toTerm u.boxSize, toTerm u.total, toTerm u.writeCap,
+    toTerm u.sent, toTerm u.next]
   ofTerm t := do
-    let fs ← fieldsOf t 5
-    some ⟨← fieldAt fs 0, ← fieldAt fs 1, ← fieldAt fs 2, ← fieldAt fs 3, ← fieldAt fs 4⟩
+    let fs ← fieldsOf t 6
+    some ⟨← fieldAt fs 0, ← fieldAt fs 1, ← fieldAt fs 2, ← fieldAt fs 3, ← fieldAt fs 4,
+      ← fieldAt fs 5⟩
+
+/-- A job saved before uploads has five fields. -/
+instance : Persist Job where
+  toTerm j := .TList #[toTerm j.id, toTerm j.token, toTerm j.index, toTerm j.box, toTerm j.line,
+    toTerm j.upload]
+  ofTerm t := do
+    let fs ← (fieldsOf t 6).orElse fun _ => fieldsOf t 5
+    some ⟨← fieldAt fs 0, ← fieldAt fs 1, ← fieldAt fs 2, ← fieldAt fs 3, ← fieldAt fs 4,
+      ← fieldAt fs 5⟩
 
 instance : Persist Status where
   toTerm | .pending => toTerm (0 : Nat) | .sent => toTerm (1 : Nat)
@@ -131,16 +190,21 @@ instance : Persist Status where
     match (← ofTerm t : Nat) with
     | 0 => some .pending | 1 => some .sent | _ => none
 
-/-- A line is saved with its time; one saved before times were kept has six fields, and loads
-with none. -/
+instance : Persist Attachment where
+  toTerm a := .TList #[toTerm a.name, toTerm a.filetype, toTerm a.size, toTerm a.file]
+  ofTerm t := do
+    let fs ← fieldsOf t 4
+    some ⟨← fieldAt fs 0, ← fieldAt fs 1, ← fieldAt fs 2, ← fieldAt fs 3⟩
+
+/-- A line is saved with its time and attachment; one saved before times were kept has six
+fields, and one saved before attachments seven. -/
 instance : Persist Line where
   toTerm l := .TList #[toTerm l.id, toTerm l.sender, toTerm l.index, toTerm l.text,
-    toTerm l.status, toTerm l.idx64, toTerm l.time]
+    toTerm l.status, toTerm l.idx64, toTerm l.time, toTerm l.attachment]
   ofTerm t := do
-    let fs := (fieldsOf t 7).orElse fun _ => fieldsOf t 6
-    let fs ← fs
+    let fs ← [8, 7, 6].firstM (fieldsOf t ·)
     some ⟨← fieldAt fs 0, ← fieldAt fs 1, ← fieldAt fs 2, ← fieldAt fs 3, ← fieldAt fs 4,
-      ← fieldAt fs 5, ← fieldAt fs 6⟩
+      ← fieldAt fs 5, ← fieldAt fs 6, ← fieldAt fs 7⟩
 
 instance : Persist Joining where
   toTerm
@@ -163,15 +227,23 @@ instance : Persist Inducting where
     some ⟨← fieldAt fs 0, ← fieldAt fs 1, ← fieldAt fs 2, ← fieldAt fs 3, ← fieldAt fs 4,
       ← fieldAt fs 5⟩
 
+instance : Persist Download where
+  toTerm d := .TList #[toTerm d.stream, toTerm d.index, toTerm d.next, toTerm d.readCap,
+    toTerm d.total]
+  ofTerm t := do
+    let fs ← fieldsOf t 5
+    some ⟨← fieldAt fs 0, ← fieldAt fs 1, ← fieldAt fs 2, ← fieldAt fs 3, ← fieldAt fs 4⟩
+
+/-- A chat saved before downloads has eleven fields. -/
 instance : Persist Chat where
   toTerm c := .TList #[toTerm c.name, toTerm c.writeCap, toTerm c.nextWrite, toTerm c.group,
     toTerm c.cursors, toTerm c.names, toTerm c.jobs, toTerm c.log, toTerm c.joining,
-    toTerm c.inducting, toTerm c.nextId]
+    toTerm c.inducting, toTerm c.nextId, toTerm c.downloads]
   ofTerm t := do
-    let fs ← fieldsOf t 11
+    let fs ← (fieldsOf t 12).orElse fun _ => fieldsOf t 11
     some ⟨← fieldAt fs 0, ← fieldAt fs 1, ← fieldAt fs 2, ← fieldAt fs 3, ← fieldAt fs 4,
       ← fieldAt fs 5, ← fieldAt fs 6, ← fieldAt fs 7, ← fieldAt fs 8, ← fieldAt fs 9,
-      ← fieldAt fs 10⟩
+      ← fieldAt fs 10, (fieldAt fs 11).getD []⟩
 
 instance : Persist State where
   toTerm s := .TList #[toTerm s.me, toTerm s.chats]

@@ -5,6 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 import CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member.Walk
 import GroupChatClient.Pigeonhole.Box
+import GroupChatClient.Shell
 import GroupChatClient.GroupChatKatzenqt1.Core
 
 /-! # Carrying out an action
@@ -18,6 +19,40 @@ namespace GroupChatClient.GroupChatKatzenqt1
 open CryptWalker.Protocols.GroupComm.Common
 open CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member
 open GroupChatClient.Pigeonhole (publish retryMs startOfWriteCap)
+
+/-- Files under the state directory, by name relative to it. -/
+structure Store where
+  write : String → ByteArray → IO Unit
+  read : String → IO ByteArray
+  remove : String → IO Unit
+
+/-- Files under `dir`, readable by the user alone. -/
+def Store.dir (dir : System.FilePath) : Store where
+  write name bytes := do
+    let path := dir / name
+    if let some parent := path.parent then
+      IO.FS.createDirAll parent
+      IO.setAccessRights parent { user := { read := true, write := true, execution := true } }
+    replacePrivate path bytes
+  read name := IO.FS.readBinFile (dir / name)
+  remove name := do
+    if ← (dir / name).pathExists then IO.FS.removeFile (dir / name)
+
+/-- Files in memory; for tests. -/
+def Store.memory (files : IO.Ref (List (String × ByteArray))) : Store where
+  write name bytes := files.modify fun fs => (name, bytes) :: fs.filter (·.1 != name)
+  read name := do
+    match (← files.get).lookup name with
+    | some b => pure b
+    | none => throw (IO.userError s!"no file {name}")
+  remove name := files.modify (·.filter (·.1 != name))
+
+/-- Run `x` with a store in memory holding `files`; what it did, and the files after. -/
+def Store.withMemory {α : Type} (files : List (String × ByteArray)) (x : Store → IO α) :
+    IO (α × List (String × ByteArray)) := do
+  let ref ← IO.mkRef files
+  let a ← x (Store.memory ref)
+  return (a, ← ref.get)
 
 inductive Outcome
   | done (m : Msg)
@@ -38,8 +73,14 @@ def describe : Action → String
   | .awaitReply chat _ _ box1 _ => s!"{chat}: wait for the voucher's reply in box {counter box1}"
   | .readVoucher chat _ => s!"{chat}: read a voucher's box 0"
   | .induct chat .. => s!"{chat}: seal the reply to a voucher"
+  | .file chat _ bytes => s!"{chat}: {(bytes.map (s!"keep a file of {·.size} bytes")).getD "delete a file"}"
+  | .load chat job _ => s!"{chat}: read job {job}'s message back"
+  | .substream chat job => s!"{chat}: new substream for job {job}"
+  | .writeChunk chat job n _ index box =>
+    s!"{chat}: write box {n} of job {job} to substream box {counter index} ({box.size} bytes)"
+  | .readChunk chat _ _ index => s!"{chat}: read substream box {counter index}"
 
-def perform (b : Backend) (a : Action) : IO Outcome := do
+def perform (b : Backend) (st : Store) (a : Action) : IO Outcome := do
   try
     match a with
     | .create chat joining => return .done (.created chat joining (← b.newKeypair))
@@ -74,12 +115,29 @@ def perform (b : Backend) (a : Action) : IO Outcome := do
       let i ← b.voucherInduct voucher payload who
       discard <| publish b.toBackend vwc box1 i.sealedReply
       return .done (.inducted chat i)
+    | .file chat name bytes =>
+      try
+        match bytes with
+        | some b => st.write name b
+        | none => st.remove name
+        return .done (.filed chat name none)
+      catch e => return .done (.filed chat name (some (toString e)))
+    | .load chat job name =>
+      try return .done (.loaded chat job (some (← st.read name)))
+      catch _ => return .done (.loaded chat job none)
+    | .substream chat job => return .done (.substream chat job (← b.newKeypair))
+    | .writeChunk chat job n wc index box =>
+      try return .done (.wroteChunk chat job n (← b.writeBox wc index box))
+      catch _ => return .retry a retryMs
+    | .readChunk chat stream rc index =>
+      return .done (.readChunk chat stream index (← b.readBox rc index))
   catch e =>
     let chat := match a with
       | .create c .. | .write c .. | .read c .. | .wake c .. | .scanRead c .. | .walk c ..
-      | .derive c .. | .mint c .. | .awaitReply c .. | .readVoucher c .. | .induct c .. => c
+      | .derive c .. | .mint c .. | .awaitReply c .. | .readVoucher c .. | .induct c ..
+      | .file c .. | .load c .. | .substream c .. | .writeChunk c .. | .readChunk c .. => c
     match a with
-    | .read .. | .scanRead .. => return .retry a retryMs
+    | .read .. | .scanRead .. | .readChunk .. | .substream .. => return .retry a retryMs
     | _ => return .done (.failed chat s!"{describe a} failed: {e}")
 
 end GroupChatClient.GroupChatKatzenqt1
