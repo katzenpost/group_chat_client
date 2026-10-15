@@ -28,6 +28,7 @@ rev = "b6606fc06183a72e535949dbb1263fd74be873f6"
 
 [[lean_lib]]
 name = "GroupChatClient"
+globs = ["GroupChatClient.+"]
 
 [[lean_exe]]
 name = "group-chat-client-test"
