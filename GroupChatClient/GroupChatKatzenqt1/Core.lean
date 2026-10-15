@@ -3,9 +3,9 @@ SPDX-FileCopyrightText: Copyright (C) 2026 David Stainton
 SPDX-License-Identifier: AGPL-3.0-only
 -/
 
-import CryptWalker.GroupChat.Member.Gcm
-import CryptWalker.GroupChat.Member.Membership
-import CryptWalker.GroupChat.Member.ReplyWho
+import CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member.Gcm
+import CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member.Membership
+import CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member.ReplyWho
 import GroupChatClient.Base64
 import GroupChatClient.GroupChatKatzenqt1.Presentation
 import GroupChatClient.GroupChatKatzenqt1.Backend
@@ -24,7 +24,8 @@ everything owed is written `reply`, then `introduceNow`. -/
 
 namespace GroupChatClient.GroupChatKatzenqt1
 
-open CryptWalker.GroupChat.Member
+open CryptWalker.Protocols.GroupComm.Common
+open CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member
 open GroupChatClient.Pigeonhole (Keypair ReadOutcome startOfWriteCap readCapOf)
 
 /-- Network work. Each comes back as the `Msg` named. -/

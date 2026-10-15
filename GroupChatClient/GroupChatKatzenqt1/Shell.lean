@@ -16,7 +16,8 @@ came of it. Another task watches the replica epoch. -/
 
 namespace GroupChatClient.GroupChatKatzenqt1
 
-open CryptWalker.GroupChat.Member
+open CryptWalker.Protocols.GroupComm.Common
+open CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member
 open GroupChatClient.GroupChatKatzenqt1.Persist
 open Logger
 

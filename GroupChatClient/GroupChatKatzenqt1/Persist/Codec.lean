@@ -4,7 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 -/
 
 import Cborg
-import CryptWalker.GroupChat.Member.Dict
+import CryptWalker.Protocols.GroupComm.Common.Dict
 
 /-! # Keeping state on disk
 
@@ -14,7 +14,7 @@ array of its fields in declaration order; the whole is `[formatVersion, value]`.
 namespace GroupChatClient.GroupChatKatzenqt1.Persist
 
 open Cborg
-open CryptWalker.GroupChat.Member
+open CryptWalker.Protocols.GroupComm.Common
 
 def formatVersion : Nat := 1
 
