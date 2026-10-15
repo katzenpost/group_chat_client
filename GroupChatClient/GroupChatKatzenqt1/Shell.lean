@@ -26,6 +26,7 @@ def Msg.describe : Msg → String
   | .join chat => s!"{chat}: join"
   | .induct chat _ => s!"{chat}: add a member"
   | .send chat text => s!"{chat}: send {text.length} characters"
+  | .sendFile chat _ bytes => s!"{chat}: send a file of {bytes.size} bytes"
   | .scan chat => s!"{chat}: scan"
   | .leave chat => s!"{chat}: leave"
   | .remove chat _ => s!"{chat}: remove a member"
@@ -49,6 +50,16 @@ def Msg.describe : Msg → String
   | .inducted chat i => s!"{chat}: sealed the reply for {i.name.length}-character name"
   | .epoch n => s!"replica epoch {n}"
   | .failed chat what => s!"{chat}: {what}"
+  | .filed chat _ error => s!"{chat}: {(error.map ("a file could not be kept: " ++ ·)).getD "kept a file"}"
+  | .loaded chat job bytes => s!"{chat}: job {job}'s message: {(bytes.map (s!"{·.size} bytes")).getD "lost"}"
+  | .substream chat job _ => s!"{chat}: made a substream for job {job}"
+  | .wroteChunk chat job n _ => s!"{chat}: wrote box {n} of job {job}"
+  | .readChunk chat stream index o =>
+    let what := match o with
+      | .data p _ => s!"{p.size} bytes"
+      | .notFound => "nothing yet"
+      | .tombstone _ => "a tombstone"
+    s!"{chat}: read a substream of {short stream} at box {counter index}: {what}"
 
 structure Shell where
   backend : Backend
@@ -73,7 +84,8 @@ partial def launch (sh : Shell) (a : Action) : IO Unit := do
   let net := sh.log.withModule s!"{sh.app}/net"
   discard <| IO.asTask (prio := .dedicated) do
     net.debug (describe a)
-    match ← perform sh.backend a with
+    let store := Store.dir (sh.statePath.parent.getD ".")
+    match ← perform sh.backend store a with
     | .done m => sh.post m
     | .retry a ms =>
       net.info s!"{describe a}: trying again in {ms} ms"

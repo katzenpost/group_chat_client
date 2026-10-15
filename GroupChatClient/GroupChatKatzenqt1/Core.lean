@@ -7,6 +7,7 @@ import CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member.Gcm
 import CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member.Membership
 import CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member.ReplyWho
 import GroupChatClient.Base64
+import GroupChatClient.GroupChatKatzenqt1.Files
 import GroupChatClient.GroupChatKatzenqt1.Presentation
 import GroupChatClient.GroupChatKatzenqt1.Backend
 import GroupChatClient.GroupChatKatzenqt1.State
@@ -27,6 +28,7 @@ namespace GroupChatClient.GroupChatKatzenqt1
 open CryptWalker.Protocols.GroupComm.Common
 open CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member
 open GroupChatClient.Pigeonhole (Keypair ReadOutcome startOfWriteCap readCapOf)
+open GroupChatClient.GroupChatKatzenqt1.Files (FileUpload)
 
 /-- Network work. Each comes back as the `Msg` named. -/
 inductive Action
@@ -53,12 +55,26 @@ inductive Action
   | readVoucher (chat : String) (voucher : ByteArray)
   /-- Seal the reply and publish it to box 1: `inducted`. -/
   | induct (chat : String) (voucher payload whoReply voucherWriteCap : ByteArray) (box1 : Index)
+  /-- Write `bytes` to the file `name` under the state directory, or delete it when `none`:
+  `filed`. -/
+  | file (chat : String) (name : String) (bytes : Option ByteArray)
+  /-- Read the file holding an upload's message: `loaded`. -/
+  | load (chat : String) (job : Nat) (name : String)
+  /-- A new stream for an upload: `substream`. -/
+  | substream (chat : String) (job : Nat)
+  /-- Write the `n`th box of an upload, retrying until it is written: `wroteChunk`. -/
+  | writeChunk (chat : String) (job : Nat) (n : Nat) (writeCap : ByteArray) (index : Index)
+      (box : ByteArray)
+  /-- Read a box of the substream a member's `I` box named: `readChunk`. -/
+  | readChunk (chat : String) (stream : Key) (readCap : ByteArray) (index : Index)
 
 inductive Msg
   | create (chat : String)
   | join (chat : String)
   | induct (chat : String) (code : String)
   | send (chat : String) (text : String)
+  /-- Send a file, named `name`. -/
+  | sendFile (chat : String) (name : String) (bytes : ByteArray)
   | scan (chat : String)
   /-- Forget a group: stop reading and writing it, and delete it. -/
   | leave (chat : String)
@@ -80,6 +96,11 @@ inductive Msg
   | inducted (chat : String) (i : Inducted)
   | epoch (n : Nat)
   | failed (chat : String) (what : String)
+  | filed (chat : String) (name : String) (error : Option String)
+  | loaded (chat : String) (job : Nat) (bytes : Option ByteArray)
+  | substream (chat : String) (job : Nat) (kp : Keypair)
+  | wroteChunk (chat : String) (job : Nat) (n : Nat) (next : Index)
+  | readChunk (chat : String) (stream : Key) (index : Index) (outcome : ReadOutcome)
 
 /-- What is under way on the network; not saved, since a restart begins it again. -/
 structure Flight where
@@ -88,6 +109,17 @@ structure Flight where
   reading : List (String × Key) := []
   /-- Reads of each stream that found nothing, in a row. -/
   misses : List ((String × Key) × Nat) := []
+  /-- Uploads with a box being written or a substream being made, by chat and job. -/
+  uploading : List (String × Nat) := []
+  /-- Uploads whose message is being read from its file. -/
+  loading : List (String × Nat) := []
+  /-- Each upload's message, once made or read back. -/
+  blobs : List ((String × Nat) × ByteArray) := []
+  /-- What each download has read: the index of its next box, and the boxes so far. -/
+  fetched : List ((String × Key) × (Index × Array ByteArray)) := []
+  /-- The bytes of a file a download just brought, by sender and box, while the member reads
+  the message without them. -/
+  arriving : List ((Key × Index) × ByteArray) := []
   deriving Inhabited
 
 structure Core where
@@ -141,21 +173,40 @@ def boxOf (g : Group) (o : Outgoing) : Option ByteArray := do
     { gcm with membershipHash := membershipHash caps }
   some (Gcm.frame (Gcm.encode gcm))
 
+/-- The file under the state directory that holds the message of upload `job`. -/
+def spoolFile (c : Chat) (job : Nat) (now : Nat) : String := s!"spool/{slug c.name}-{now}-{job}.cbor"
+
 /-- Queue `outgoing`, each written after the one before; `line` shows the one carrying
-`content`. A message too long for a box is abandoned. -/
+`content`, into which the bytes of a file it carries, `payload`, are put. A message too long for
+a box goes to a substream, written before the `I` box naming it. -/
 def enqueue (c : Chat) (outgoing : List Outgoing) (content : Option ByteArray := none)
-    (line : Option Nat := none) : CoreM Chat := do
-  let max := (← get).1.maxPlaintext
+    (line : Option Nat := none) (payload : Option ByteArray := none) : CoreM Chat := do
+  let core := (← get).1
+  let max := core.maxPlaintext
   let mut c := c
   for o in outgoing do
     let some g := c.group | pure ()
     let mine := content.isSome && o.message.content.map (·.data) == content.map (·.data)
-    match boxOf g o with
+    let box := (boxOf g o).bind fun box =>
+      match payload.filter fun _ => mine with
+      | some p => (Files.putPayload (box.extract 1 box.size) p).map Gcm.frame
+      | none => some box
+    match box with
     | some box =>
+      let line := if mine then line else none
+      let (id, c') := c.fresh
       if box.size ≤ max then
-        let (id, c') := c.fresh
-        c := { c' with jobs := c'.jobs ++ [{ id, token := some o.token, box,
-                                             line := if mine then line else none }] }
+        c := { c' with jobs := c'.jobs ++ [{ id, token := some o.token, box, line }] }
+        continue
+      let blob := box.extract 1 box.size
+      if blob.size ≤ Files.maxFile + max then
+        let file := spoolFile c id core.now
+        emit (.file c.name file (some blob))
+        modify fun (core, as) => ({ core with flight := { core.flight with
+          blobs := ((c.name, id), blob) :: core.flight.blobs } }, as)
+        let upload := { file, boxSize := max, total := Files.chunkCount blob.size max }
+        c := { c' with jobs := c'.jobs ++ [{ id, token := some o.token, box := .empty, line,
+                                             upload := some upload }] }
         continue
     | none => pure ()
     c := (onGroup c (Group.abandoned o.token) ()).2
@@ -173,9 +224,47 @@ def textOf (content : ByteArray) : String :=
   match Gcm.decode content with
   | some g =>
     if g.msgType = Gcm.MsgType.text then g.text.getD ""
-    else if g.msgType = Gcm.MsgType.fileUpload then "[a file, which cannot be shown yet]"
+    else if g.msgType = Gcm.MsgType.fileUpload then "[a file that cannot be read]"
     else "[a message that cannot be shown]"
   | none => "[a message that cannot be read]"
+
+/-- A size as people read it. -/
+def sizeText (n : Nat) : String :=
+  if n < 1024 then s!"{n} bytes"
+  else if n < 1024 * 1024 then s!"{(n + 512) / 1024} KB"
+  else s!"{n / (1024 * 1024)}.{n % (1024 * 1024) * 10 / (1024 * 1024)} MB"
+
+/-- How a line carrying a file reads, where it cannot be shown. -/
+def fileText (a : Attachment) : String := s!"[file {a.name}, {sizeText a.size}]"
+
+/-- The file under the state directory for line `id` of `c`, carrying a file called `name`. -/
+def attachmentFile (c : Chat) (id now : Nat) (name : String) : String :=
+  s!"attachments/{slug c.name}/{now}-{id}-{name}"
+
+/-- A line for `content` from `sender`, and the file it carries, kept under the state
+directory. -/
+def deliver (c : Chat) (sender : Key) (index : Index) (content : ByteArray) : CoreM Chat := do
+  let upload := (Gcm.decode content).bind Files.fileOf
+  match upload with
+  | some f =>
+    let f := match (← getFlight).arriving.lookup (sender, index) with
+      | some payload => { f with payload }
+      | none => f
+    let name := Files.safeName f.basename
+    let a : Attachment := { name, filetype := f.filetype, size := f.payload.size,
+                            file := attachmentFile c c.nextId (← get).1.now name }
+    if f.payload.size > Files.maxFile then
+      return (c.say fun id => { id, sender, index, text := s!"[file {name}, {sizeText a.size}, too large to keep]" }).2
+    emit (.file c.name a.file (some f.payload))
+    return (c.say fun id => { id, sender, index, text := fileText a, attachment := some a }).2
+  | none => return (c.say fun id => { id, sender, index, text := textOf content }).2
+
+/-- Keep the lines `keep` holds of, and delete the files the others carry. -/
+def dropLines (c : Chat) (keep : Line → Bool) : CoreM Chat := do
+  for l in c.log do
+    if let some a := l.attachment then
+      unless keep l do emit (.file c.name a.file none)
+  return { c with log := c.log.filter keep }
 
 /-- Do what the member asks. -/
 def effects (c : Chat) (es : List Effect) : CoreM Chat := do
@@ -191,10 +280,9 @@ def effects (c : Chat) (es : List Effect) : CoreM Chat := do
     | .readBox stream readCap index _ => emit (.scanRead c.name stream readCap index)
     | .deriveIndexes stream start count => emit (.derive c.name stream start count)
     | .walk stream start targets keep => emit (.walk c.name stream start targets keep)
-    | .deliver sender index content =>
-      c := (c.say fun id => { id, sender, index, text := textOf content }).2
+    | .deliver sender index content => c ← deliver c sender index content
     | .expire sender index =>
-      c := { c with log := c.log.filter fun l => !(l.sender == sender && l.index == index) }
+      c ← dropLines c fun l => !(l.sender == sender && l.index == index)
     | .sendJoinReply .. => pure ()
   return c
 
@@ -220,9 +308,8 @@ def remark (p : Presentation) (c : Chat) (stream : Key) (plaintext : ByteArray) 
       if c.group.any (·.me == keyOf i.readCap) then c
       else c.notice s!"{label p c stream} added ~{p.name i.name}"
     | none => c
-  | .indirection .. | .continued _ =>
-    c.notice s!"{label p c stream} sent a long message, which cannot be shown yet"
-  | .unknown => c
+  | .continued _ => c.notice s!"{label p c stream} sent a message that cannot be read"
+  | .indirection .. | .unknown => c
 
 /-! ## Under way -/
 
@@ -233,7 +320,7 @@ def startReads (c : Chat) : CoreM Chat := do
   let some g := c.group | return c
   let mut c := c
   for r in g.readers.values do
-    if ← readingNow c.name r.stream then continue
+    if (← readingNow c.name r.stream) || c.downloads.any (·.stream == r.stream) then continue
     let at_ := c.cursors.getD r.stream r.next
     c := { c with cursors := c.cursors.set r.stream at_ }
     modifyFlight fun f => { f with reading := (c.name, r.stream) :: f.reading }
@@ -245,6 +332,7 @@ def startWrite (c : Chat) : CoreM Chat := do
   match c.jobs with
   | [] => return c
   | j :: rest =>
+    if j.upload.any fun u => u.sent < u.total then return c
     let index := j.index.getD c.nextWrite
     modifyFlight fun f => { f with writing := c.name :: f.writing }
     emit (.write c.name j.id c.writeCap index j.box)
@@ -261,12 +349,44 @@ def startInduction (c : Chat) : CoreM Chat := do
   emit (.induct c.name i.voucher i.payload (ReplyWho.encode who) i.voucherWriteCap i.box1)
   return { c with inducting := some { i with sealing := true } }
 
+def blobOf (chat : String) (job : Nat) : CoreM (Option ByteArray) :=
+  return (← getFlight).blobs.lookup (chat, job)
+
+/-- Write the next box of each upload, making its substream or reading its message back first. -/
+def startUploads (c : Chat) : CoreM Unit := do
+  for j in c.jobs do
+    let some u := j.upload | continue
+    let f ← getFlight
+    if u.sent ≥ u.total || f.uploading.contains (c.name, j.id) then continue
+    if u.writeCap.size = 0 then
+      modifyFlight fun f => { f with uploading := (c.name, j.id) :: f.uploading }
+      emit (.substream c.name j.id)
+      continue
+    match ← blobOf c.name j.id with
+    | some blob =>
+      modifyFlight fun f => { f with uploading := (c.name, j.id) :: f.uploading }
+      emit (.writeChunk c.name j.id u.sent u.writeCap u.next (Files.chunk blob u.boxSize u.sent))
+    | none =>
+      unless f.loading.contains (c.name, j.id) do
+        modifyFlight fun f => { f with loading := (c.name, j.id) :: f.loading }
+        emit (.load c.name j.id u.file)
+
+/-- Read the next box of each download. -/
+def startDownloads (c : Chat) : CoreM Unit := do
+  for d in c.downloads do
+    if ← readingNow c.name d.stream then continue
+    let at_ := (((← getFlight).fetched.lookup (c.name, d.stream)).map (·.1)).getD (startOf d.readCap)
+    modifyFlight fun f => { f with reading := (c.name, d.stream) :: f.reading }
+    emit (.readChunk c.name d.stream d.readCap at_)
+
 /-- Start whatever can start. -/
 def pump : CoreM Unit := do
   for c in (← get).1.state.chats do
     let c ← startWrite c
     let c ← startReads c
     let c ← startInduction c
+    startUploads c
+    startDownloads c
     setChat c
 
 def withChat (name : String) (f : Chat → CoreM Chat) : CoreM Unit := do
@@ -295,6 +415,28 @@ def followReader (c : Chat) (stream : Key) : Chat :=
 def sanitize (name : String) : String :=
   let s := String.ofList (name.toList.filter fun ch => !(ch.toNat < 0x20 || (0x7f ≤ ch.toNat && ch.toNat ≤ 0x9f)))
   if s.isEmpty then "unnamed" else s
+
+/-- A download is over: tell the member what came of it, in its place in the stream. -/
+def finish (c : Chat) (d : Download) (blob : Option ByteArray) : CoreM Chat := do
+  modifyFlight fun f => { f with fetched := f.fetched.filter (·.1 != (c.name, d.stream)) }
+  let p := (← get).1.present
+  let c := { c with downloads := c.downloads.filter (·.stream != d.stream) }
+  let blob := blob.map fun b => match Files.takePayload b with
+    | some (without, payload) => (without, some payload)
+    | none => (b, none)
+  if let some (_, some payload) := blob then
+    modifyFlight fun f => { f with arriving := [((d.stream, d.index), payload)] }
+  let message := blob.bind (Gcm.toMessage ·.1)
+  let c := match blob, message with
+    | some (b, _), some _ => remark p c d.stream (Gcm.frame b)
+    | _, _ => c.notice s!"{label p c d.stream} sent a message that could not be fetched"
+  let (es, c) := onGroup c (Group.observe d.stream d.index message d.next) []
+  let c ← effects c es
+  modifyFlight fun f => { f with arriving := [] }
+  return c
+
+def mapJob (c : Chat) (job : Nat) (f : Job → Job) : Chat :=
+  { c with jobs := c.jobs.map fun j => if j.id == job then f j else j }
 
 def readResult : ReadOutcome → ReadResult × Option Index
   | .data p next => (.data (messageOf p), some next)
@@ -370,6 +512,77 @@ def handle : Msg → CoreM Unit
     let (id, c) := c.say fun id => { id, sender := g.me, text, status := .pending }
     let (out, c) := onGroup c (Group.compose (some content)) []
     enqueue c out (some content) (some id)
+  | .sendFile name file bytes => withChat name fun c => do
+    let some g := c.group | return c.notice "this conversation has not been joined yet"
+    if bytes.size > Files.maxFile then
+      return c.notice s!"that file is too large to send: at most {sizeText Files.maxFile}"
+    let safe := Files.safeName file
+    let f : FileUpload := { payload := .empty, filetype := Files.filetypeOf safe, basename := safe }
+    let content := Files.fileContent (membershipHash (memberCaps g)) f
+    let a : Attachment := { name := safe, filetype := f.filetype, size := bytes.size,
+                            file := attachmentFile c c.nextId (← get).1.now safe }
+    emit (.file name a.file (some bytes))
+    let (id, c) := c.say fun id => { id, sender := g.me, text := fileText a, status := .pending,
+                                     attachment := some a }
+    let (out, c) := onGroup c (Group.compose (some content)) []
+    enqueue c out (some content) (some id) (some bytes)
+  | .filed name file error => withChat name fun c =>
+    return match error with
+      | some e => c.notice s!"{file} could not be kept: {e}"
+      | none => c
+  | .loaded name job bytes => do
+    modifyFlight fun f => { f with loading := f.loading.erase (name, job) }
+    withChat name fun c => do
+      let some j := c.jobs.find? (·.id == job) | return c
+      match bytes with
+      | some b =>
+        modifyFlight fun f => { f with blobs := ((name, job), b) :: f.blobs.filter (·.1 != (name, job)) }
+        return c
+      | none =>
+        let c := match j.token with
+          | some t => (onGroup c (Group.abandoned t) ()).2
+          | none => c
+        return { c with jobs := c.jobs.filter (·.id != job) }.notice "a message could not be sent: what it held was lost"
+  | .substream name job kp => do
+    modifyFlight fun f => { f with uploading := f.uploading.erase (name, job) }
+    withChat name fun c => return mapJob c job fun j =>
+      { j with upload := j.upload.map ({ · with writeCap := kp.writeCap, next := kp.first }) }
+  | .wroteChunk name job n next => do
+    modifyFlight fun f => { f with uploading := f.uploading.erase (name, job) }
+    withChat name fun c => do
+      let some j := c.jobs.find? (·.id == job) | return c
+      let some u := j.upload | return c
+      unless u.sent == n do return c
+      let u := { u with sent := n + 1, next }
+      if u.sent < u.total then return mapJob c job fun j => { j with upload := some u }
+      modifyFlight fun f => { f with blobs := f.blobs.filter (·.1 != (name, job)) }
+      emit (.file name u.file none)
+      return mapJob c job fun j =>
+        { j with upload := some u, box := Files.indirection u.total (readCapOf u.writeCap) }
+  | .readChunk name stream index outcome => do
+    stopReading name stream
+    withChat name fun c => do
+      let some d := c.downloads.find? (·.stream == stream) | return c
+      let (at_, parts) := ((← getFlight).fetched.lookup (name, stream)).getD (startOf d.readCap, #[])
+      unless at_ == index do return c
+      let max := (← get).1.maxPlaintext
+      match outcome with
+      | .notFound =>
+        modifyFlight fun f => { f with reading := (name, stream) :: f.reading }
+        emit (.wake name stream (backoff (← missed name stream)))
+        return c
+      | .tombstone _ => finish c d none
+      | .data box next =>
+        hit name stream
+        let parts := parts.push box
+        let tag := if box.size = 0 then 0 else box[0]!.toNat
+        if tag == 'F'.toNat then finish c d (Files.assemble parts)
+        else if tag == 'C'.toNat && parts.size * max ≤ Files.maxFile + 2 * max
+            && d.total.all (parts.size < ·) then
+          modifyFlight fun f => { f with
+            fetched := ((name, stream), (next, parts)) :: f.fetched.filter (·.1 != (name, stream)) }
+          return c
+        else finish c d none
   | .wrote name job index next => do
     modifyFlight fun f => { f with writing := f.writing.erase name }
     withChat name fun c => do
@@ -396,6 +609,15 @@ def handle : Msg → CoreM Unit
         return { c with cursors := c.cursors.set stream next }
       | .data plaintext next =>
         hit name stream
+        if let .indirection total readCap := Gcm.unframe plaintext then
+          let max := (← get).1.maxPlaintext
+          if (total.getD 0) * max ≤ Files.maxFile + 2 * max then
+            return { c with downloads := c.downloads ++ [{ stream, index, next, readCap, total }],
+                            cursors := c.cursors.set stream next }
+          let c := c.notice s!"{label (← get).1.present c stream} sent a file too large to fetch"
+          let (es, c) := onGroup c (Group.observe stream index none next) []
+          let c ← effects c es
+          return { c with cursors := c.cursors.set stream next }
         let c := remark (← get).1.present c stream plaintext
         let (es, c) := onGroup c (Group.observe stream index (messageOf plaintext) next) []
         let c ← effects c es
@@ -409,21 +631,29 @@ def handle : Msg → CoreM Unit
       c ← effects c' es
     return c.notice "scanning for missed messages"
   | .leave name => do
+    if let some c ← getChat name then
+      for f in c.files do emit (.file name f none)
     modify fun (core, as) =>
       ({ core with state := { core.state with chats := core.state.chats.filter (·.name != name) } }, as)
     modifyFlight fun f => { writing := f.writing.erase name,
                             reading := f.reading.filter (·.1 != name),
-                            misses := f.misses.filter (·.1.1 != name) }
+                            misses := f.misses.filter (·.1.1 != name),
+                            uploading := f.uploading.filter (·.1 != name),
+                            loading := f.loading.filter (·.1 != name),
+                            blobs := f.blobs.filter (·.1.1 != name),
+                            fetched := f.fetched.filter (·.1.1 != name) }
   | .remove name who => withChat name fun c => do
     unless c.group.any (·.readers.contains who) do return c.notice "that member is no longer in this group"
     let label := label (← get).1.present c who
     let c := (onGroup c (Group.remove who) ()).2
     stopReading name who
     hit name who
+    modifyFlight fun f => { f with fetched := f.fetched.filter (·.1 != (name, who)) }
+    let c ← dropLines c (·.sender != who)
     return { c with cursors := c.cursors.erase who,
-                    log := c.log.filter (·.sender != who) }.notice
+                    downloads := c.downloads.filter (·.stream != who) }.notice
       s!"stopped reading {label} and deleted what they sent; they can still read this group"
-  | .clear name => withChat name fun c => return { c with log := [] }
+  | .clear name => withChat name fun c => dropLines c fun _ => false
   | .scanRead name stream index outcome => withChat name fun c => do
     let (result, next) := readResult outcome
     let (es, c) := onGroup c (Group.handle (.boxRead stream index result next)) []
