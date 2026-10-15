@@ -29,11 +29,13 @@ structure Store where
 /-- Files under `dir`, readable by the user alone. -/
 def Store.dir (dir : System.FilePath) : Store where
   write name bytes := do
-    let path := dir / name
-    if let some parent := path.parent then
-      IO.FS.createDirAll parent
-      IO.setAccessRights parent { user := { read := true, write := true, execution := true } }
-    replacePrivate path bytes
+    let mut at_ := dir
+    for part in (name.splitOn "/").dropLast do
+      at_ := at_ / part
+      unless ← at_.isDir do
+        IO.FS.createDir at_
+        IO.setAccessRights at_ { user := { read := true, write := true, execution := true } }
+    replacePrivate (dir / name) bytes
   read name := IO.FS.readBinFile (dir / name)
   remove name := do
     if ← (dir / name).pathExists then IO.FS.removeFile (dir / name)
