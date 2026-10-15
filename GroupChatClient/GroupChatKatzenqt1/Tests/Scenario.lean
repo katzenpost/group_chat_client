@@ -40,7 +40,8 @@ held asks and hears nothing until it is released.
 namespace GroupChatClient.GroupChatKatzenqt1.Tests.Scenario
 
 open GroupChatClient
-open CryptWalker.GroupChat.Member
+open CryptWalker.Protocols.GroupComm.Common
+open CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member
 open GroupChatClient.Pigeonhole (startOfWriteCap readCapOf)
 
 inductive Later

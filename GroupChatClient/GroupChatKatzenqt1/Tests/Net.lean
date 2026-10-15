@@ -14,7 +14,8 @@ nothing else is left to do. -/
 
 namespace GroupChatClient.GroupChatKatzenqt1.Tests
 
-open CryptWalker.GroupChat.Member
+open CryptWalker.Protocols.GroupComm.Common
+open CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member
 
 inductive Later
   | act (a : Action)

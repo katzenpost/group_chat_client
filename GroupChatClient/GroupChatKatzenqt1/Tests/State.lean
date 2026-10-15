@@ -14,7 +14,8 @@ each step adds. -/
 namespace GroupChatClient.GroupChatKatzenqt1.Tests.StateTests
 
 open GroupChatClient GroupChatClient.Tests
-open CryptWalker.GroupChat.Member
+open CryptWalker.Protocols.GroupComm.Common
+open CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member
 open GroupChatClient.GroupChatKatzenqt1.Persist
 open GroupChatClient.GroupChatKatzenqt1.Persist.Persist
 
