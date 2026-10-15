@@ -1,0 +1,34 @@
+name = "group_chat_client"
+defaultTargets = ["GroupChatClient"]
+
+[leanOptions]
+autoImplicit = false
+relaxedAutoImplicit = false
+
+[[require]]
+name = "Logger"
+git = "https://github.com/katzenpost/Logger.git"
+rev = "61f4fc02ffa00401d59d98f25feda499f26b10e2"
+
+[[require]]
+name = "thinclient"
+git = "https://github.com/katzenpost/thin_client.git"
+rev = "5e96c63e95a99db2e9a74e44c09cb8a0b31c5619"
+
+[[require]]
+name = "lean_unix_socket"
+git = "https://github.com/katzenpost/lean_unix_socket.git"
+rev = "4bbfd6bb9df6bc9ce0d31252afff86d48683c9f2"
+
+# Last, so that its pin wins over the older ones its dependents carry.
+[[require]]
+name = "CryptWalker"
+git = "https://github.com/katzenpost/CryptWalker.git"
+rev = "b6606fc06183a72e535949dbb1263fd74be873f6"
+
+[[lean_lib]]
+name = "GroupChatClient"
+
+[[lean_exe]]
+name = "group-chat-client-test"
+root = "GroupChatClient.Tests.Main"

@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      ELAN_VERSION: 4.2.4
+      ELAN_SHA256: 42b94d4244e8353142c456ec0e4ca6528fd898a6c604d4059f494e706e431f63
+    steps:
+      - uses: actions/checkout@v4
+      - name: install elan
+        run: |
+          curl -fsSLO "https://github.com/leanprover/elan/releases/download/v${ELAN_VERSION}/elan-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${ELAN_SHA256}  elan-x86_64-unknown-linux-gnu.tar.gz" | sha256sum -c -
+          tar -xzf elan-x86_64-unknown-linux-gnu.tar.gz
+          ./elan-init -y --default-toolchain none --no-modify-path
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .lake
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: build-${{ hashFiles('lean-toolchain', 'lake-manifest.json') }}
+          restore-keys: build-
+      - run: make build
+      - run: make test
