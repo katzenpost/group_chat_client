@@ -24,7 +24,7 @@ rev = "4bbfd6bb9df6bc9ce0d31252afff86d48683c9f2"
 [[require]]
 name = "CryptWalker"
 git = "https://github.com/katzenpost/CryptWalker.git"
-rev = "4831c416b8552e8829f77bfc9e5710fece5379c8"
+rev = "e5fb1aba28449b8f2ea22c370d330856862245cb"
 
 [[lean_lib]]
 name = "GroupChatClient"
