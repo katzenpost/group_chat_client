@@ -31,6 +31,7 @@ def Msg.describe : Msg → String
   | .leave chat => s!"{chat}: leave"
   | .remove chat _ => s!"{chat}: remove a member"
   | .clear chat => s!"{chat}: clear"
+  | .rename chat to => s!"{chat}: rename to {to}"
   | .created chat joining _ => s!"{chat}: created a stream{if joining then " to join with" else ""}"
   | .wrote chat job index _ => s!"{chat}: wrote job {job} at box {counter index}"
   | .read chat stream index o =>
@@ -54,6 +55,7 @@ def Msg.describe : Msg → String
   | .loaded chat job bytes => s!"{chat}: job {job}'s message: {(bytes.map (s!"{·.size} bytes")).getD "lost"}"
   | .substream chat job _ => s!"{chat}: made a substream for job {job}"
   | .wroteChunk chat job n _ => s!"{chat}: wrote box {n} of job {job}"
+  | .chunkIndexes chat job _ is => s!"{chat}: derived {is.length} indexes of job {job}'s substream"
   | .readChunk chat stream index o =>
     let what := match o with
       | .data p _ => s!"{p.size} bytes"

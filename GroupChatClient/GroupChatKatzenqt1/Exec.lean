@@ -29,11 +29,13 @@ structure Store where
 /-- Files under `dir`, readable by the user alone. -/
 def Store.dir (dir : System.FilePath) : Store where
   write name bytes := do
-    let path := dir / name
-    if let some parent := path.parent then
-      IO.FS.createDirAll parent
-      IO.setAccessRights parent { user := { read := true, write := true, execution := true } }
-    replacePrivate path bytes
+    let mut at_ := dir
+    for part in (name.splitOn "/").dropLast do
+      at_ := at_ / part
+      unless ← at_.isDir do
+        IO.FS.createDir at_
+        IO.setAccessRights at_ { user := { read := true, write := true, execution := true } }
+    replacePrivate (dir / name) bytes
   read name := IO.FS.readBinFile (dir / name)
   remove name := do
     if ← (dir / name).pathExists then IO.FS.removeFile (dir / name)
@@ -78,6 +80,7 @@ def describe : Action → String
   | .substream chat job => s!"{chat}: new substream for job {job}"
   | .writeChunk chat job n _ index box =>
     s!"{chat}: write box {n} of job {job} to substream box {counter index} ({box.size} bytes)"
+  | .chunkIndexes chat job _ n => s!"{chat}: derive {n} indexes of job {job}'s substream"
   | .readChunk chat _ _ index => s!"{chat}: read substream box {counter index}"
 
 def perform (b : Backend) (st : Store) (a : Action) : IO Outcome := do
@@ -129,15 +132,17 @@ def perform (b : Backend) (st : Store) (a : Action) : IO Outcome := do
     | .writeChunk chat job n wc index box =>
       try return .done (.wroteChunk chat job n (← b.writeBox wc index box))
       catch _ => return .retry a retryMs
+    | .chunkIndexes chat job start count =>
+      return .done (.chunkIndexes chat job start (← deriveWith b.nextIndex start count))
     | .readChunk chat stream rc index =>
       return .done (.readChunk chat stream index (← b.readBox rc index))
   catch e =>
     let chat := match a with
       | .create c .. | .write c .. | .read c .. | .wake c .. | .scanRead c .. | .walk c ..
       | .derive c .. | .mint c .. | .awaitReply c .. | .readVoucher c .. | .induct c ..
-      | .file c .. | .load c .. | .substream c .. | .writeChunk c .. | .readChunk c .. => c
+      | .file c .. | .load c .. | .substream c .. | .writeChunk c .. | .chunkIndexes c .. | .readChunk c .. => c
     match a with
-    | .read .. | .scanRead .. | .readChunk .. | .substream .. => return .retry a retryMs
+    | .read .. | .scanRead .. | .readChunk .. | .substream .. | .chunkIndexes .. => return .retry a retryMs
     | _ => return .done (.failed chat s!"{describe a} failed: {e}")
 
 end GroupChatClient.GroupChatKatzenqt1

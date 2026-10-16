@@ -123,6 +123,25 @@ def image : TestM Unit := do
   check "and sees it written" sent
   check "what was spooled to send it is gone" unspooled
 
+def chunksOut (n : Net) : Nat :=
+  (n.queue.filter fun (_, a) => match a with | .writeChunk .. => true | _ => false).size
+
+def concurrent : TestM Unit := do
+  let (world, net) ← newNet 2 ["alice", "bob"]
+  let doc := bytesOf 30000 5
+  let (ok, _) ← (do
+    unless ← foundAndJoin world do return (false, false)
+    feed 0 (.sendFile "g" "big.bin" doc)
+    let several ← runUntil world fun n => chunksOut n ≥ Core.window
+    -- The replicas answer the writes in the opposite order.
+    modify fun (n : Net) => { n with queue := n.queue.reverse }
+    let read ← runUntil world fun n => received n 1 "g" "big.bin"
+    let n : Net ← get
+    let same := (attachmentOf n 1 "g" "big.bin").any fun (a : Attachment) => (fileOf? n 1 a.file).map ByteArray.data == some doc.data
+    return (several, read && same)).run net
+  check "an upload writes several boxes at once" ok.1
+  check "and they may be written in any order" ok.2
+
 def restartMidUpload : TestM Unit := do
   let (world, net) ← newNet 2 ["alice", "bob"]
   let doc := bytesOf 40000 3
@@ -180,6 +199,7 @@ def tests : TestM Unit := do
   saving
   longMessage
   image
+  concurrent
   restartMidUpload
   limits
   removeDeletes

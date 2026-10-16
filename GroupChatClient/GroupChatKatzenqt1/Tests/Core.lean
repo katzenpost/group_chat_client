@@ -117,6 +117,32 @@ def removeAndLeave : TestM Unit := do
   check "removing a member no longer there says so" refused
   check "leave deletes the group" left
 
+def rename : TestM Unit := do
+  let (world, net) ← newNet 2 ["alice", "bob"]
+  let (ok, _) ← (do
+    unless ← foundAndJoin world do return (false, false, false, false, false)
+    feed 0 (.send "g" "before")
+    -- Renamed while that message and the reads of Bob's stream are under way.
+    feed 0 (.rename "g" "friends")
+    let n ← get
+    let renamed := (chatOf n 0 "g").isNone && noticed n 0 "friends" "renamed from g"
+    feed 0 (.create "g")
+    let refused := (chatOf (← get) 0 "g").isNone &&
+      noticed (← get) 0 "friends" "g was this group's name"
+    feed 1 (.send "g" "from bob")
+    let carried ← runUntil world fun n => says n 1 "g" "before" && says n 0 "friends" "from bob"
+    feed 0 (.send "friends" "after")
+    let after ← runUntil world fun n => says n 1 "g" "after"
+    feed 0 (.rename "friends" "g")
+    let back := (chatOf (← get) 0 "g").isSome
+    return (renamed, refused, carried, after, back)).run net
+  let (renamed, refused, carried, after, back) := ok
+  check "rename gives a group another name here" renamed
+  check "a name a group had until now is not taken by another" refused
+  check "what was under way reaches the renamed group" carried
+  check "a renamed group goes on talking" after
+  check "a group can take its old name back" back
+
 def restart : TestM Unit := do
   let (world, net) ← newNet 2 ["alice", "bob"]
   let (ok, net) ← (do
@@ -194,6 +220,7 @@ def tests : TestM Unit := do
   twoMembers
   threeMembers
   removeAndLeave
+  rename
   restart
   failingWrites
   backfill
