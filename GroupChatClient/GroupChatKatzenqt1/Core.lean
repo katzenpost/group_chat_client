@@ -84,6 +84,8 @@ inductive Msg
   | remove (chat : String) (who : Key)
   /-- Delete a conversation's lines here. -/
   | clear (chat : String)
+  /-- Call a group something else here; the other members each know it by a name of their own. -/
+  | rename (chat : String) (to : String)
   | created (chat : String) (joining : Bool) (kp : Keypair)
   | wrote (chat : String) (job : Nat) (index next : Index)
   | read (chat : String) (stream : Key) (index : Index) (outcome : ReadOutcome)
@@ -104,6 +106,37 @@ inductive Msg
   | wroteChunk (chat : String) (job : Nat) (n : Nat) (next : Index)
   | chunkIndexes (chat : String) (job : Nat) (start : Index) (indexes : List Index)
   | readChunk (chat : String) (stream : Key) (index : Index) (outcome : ReadOutcome)
+
+/-- The message about the group `f` names instead; `create` and `join` name a group not yet
+there, and are kept. -/
+def Msg.mapChat (f : String → String) : Msg → Msg
+  | .induct c code => .induct (f c) code
+  | .send c text => .send (f c) text
+  | .sendFile c name bytes => .sendFile (f c) name bytes
+  | .scan c => .scan (f c)
+  | .leave c => .leave (f c)
+  | .remove c who => .remove (f c) who
+  | .clear c => .clear (f c)
+  | .rename c to => .rename (f c) to
+  | .created c joining kp => .created (f c) joining kp
+  | .wrote c job index next => .wrote (f c) job index next
+  | .read c stream index outcome => .read (f c) stream index outcome
+  | .wake c stream => .wake (f c) stream
+  | .scanRead c stream index outcome => .scanRead (f c) stream index outcome
+  | .walked c stream target skipped steps => .walked (f c) stream target skipped steps
+  | .derived c stream indexes => .derived (f c) stream indexes
+  | .minted c m box1 => .minted (f c) m box1
+  | .opened c o => .opened (f c) o
+  | .joinerPayload c voucher vwc payload box1 => .joinerPayload (f c) voucher vwc payload box1
+  | .inducted c i => .inducted (f c) i
+  | .failed c what => .failed (f c) what
+  | .filed c name error => .filed (f c) name error
+  | .loaded c job bytes => .loaded (f c) job bytes
+  | .substream c job kp => .substream (f c) job kp
+  | .wroteChunk c job n next => .wroteChunk (f c) job n next
+  | .chunkIndexes c job start indexes => .chunkIndexes (f c) job start indexes
+  | .readChunk c stream index outcome => .readChunk (f c) stream index outcome
+  | m@(.create _) | m@(.join _) | m@(.epoch _) => m
 
 /-- What is under way on the network; not saved, since a restart begins it again. -/
 structure Flight where
@@ -129,7 +162,24 @@ structure Flight where
   /-- The bytes of a file a download just brought, by sender and box, while the member reads
   the message without them. -/
   arriving : List ((Key × Index) × ByteArray) := []
+  /-- Each name a group had before it was renamed, with the name it has now, so that what comes
+  back for work started under the old name reaches it. -/
+  renamed : List (String × String) := []
   deriving Inhabited
+
+/-- What is under way for the group `old`, as for `new`. -/
+def Flight.rename (f : Flight) (old new : String) : Flight :=
+  let n (c : String) := if c == old then new else c
+  let k {α : Type} (p : String × α) := (n p.1, p.2)
+  let kk {α β : Type} (p : (String × α) × β) := (k p.1, p.2)
+  { f with writing := f.writing.map n, reading := f.reading.map k, misses := f.misses.map kk,
+           uploading := f.uploading.map k, ahead := f.ahead.map kk, chunksOut := f.chunksOut.map kk,
+           landed := f.landed.map kk, loading := f.loading.map k, blobs := f.blobs.map kk,
+           fetched := f.fetched.map kk,
+           renamed := (old, new) :: (f.renamed.filter (·.1 != new)).map fun (a, b) => (a, n b) }
+
+/-- The name the group once called `name` has now. -/
+def Flight.current (f : Flight) (name : String) : String := (f.renamed.lookup name).getD name
 
 structure Core where
   state : State
@@ -416,6 +466,13 @@ def pump : CoreM Unit := do
 def withChat (name : String) (f : Chat → CoreM Chat) : CoreM Unit := do
   if let some c ← getChat name then setChat (← f c)
 
+/-- Whether `name` was another group's until it was renamed, which says so; work started under
+it may still come back, and has to reach that group. -/
+def formerly (name : String) : CoreM Bool := do
+  let some now := (← getFlight).renamed.lookup name | return false
+  withChat now fun c => return c.notice s!"{name} was this group's name until now: give the new group another one"
+  return true
+
 def stopReading (chat : String) (stream : Key) : CoreM Unit :=
   modifyFlight fun f => { f with reading := f.reading.filter fun (c, k) => !(c == chat && k == stream) }
 
@@ -471,12 +528,14 @@ def readResult : ReadOutcome → ReadResult × Option Index
 
 def handle : Msg → CoreM Unit
   | .create name => do
+    if ← formerly name then return
     if let some c ← getChat name then
       setChat (c.notice s!"you already have a group called {name}")
       return
     setChat { name }
     emit (.create name false)
   | .join name => do
+    if ← formerly name then return
     if let some c ← getChat name then
       setChat (c.notice s!"you already have a group called {name}: to join someone else's group, give it a name of its own")
       return
@@ -699,6 +758,20 @@ def handle : Msg → CoreM Unit
                     downloads := c.downloads.filter (·.stream != who) }.notice
       s!"stopped reading {label} and deleted what they sent; they can still read this group"
   | .clear name => withChat name fun c => dropLines c fun _ => false
+  | .rename name to => do
+    let some c ← getChat name | return
+    if to.isEmpty || to == name then return
+    if (← getChat to).isSome then
+      setChat (c.notice s!"you already have a group called {to}")
+      return
+    if ((← getFlight).renamed.lookup to).any (· != name) then
+      setChat (c.notice s!"another group was called {to} until now: give this one another name")
+      return
+    let p := (← get).1.present
+    let c := { c with name := to }.notice s!"renamed from {p.name name}"
+    modify fun (core, as) => ({ core with
+      state := { core.state with chats := core.state.chats.map fun d => if d.name == name then c else d },
+      flight := core.flight.rename name to }, as)
   | .scanRead name stream index outcome => withChat name fun c => do
     let (result, next) := readResult outcome
     let (es, c) := onGroup c (Group.handle (.boxRead stream index result next)) []
@@ -735,6 +808,7 @@ def stamp (before : State) (now : Nat) (s : State) : State :=
 /-- One message: the new core, and the network work to start. -/
 def step (c : Core) (m : Msg) : Core × List Action :=
   let before := c.state
+  let m := m.mapChat c.flight.current
   let ((), (c, as)) := (do Core.handle m; Core.pump).run (c, #[])
   ({ c with state := stamp before c.now c.state }, as.toList)
 
