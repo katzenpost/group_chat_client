@@ -4,7 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 -/
 
 import GroupChatClient.GroupChatKatzenqt1.Persist.Codec
-import CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member.Group
+import Cryptlib.Protocols.GroupComm.GroupChatKatzenqt1.Member.Group
 
 /-! # Keeping a member
 
@@ -14,8 +14,8 @@ Lean client's own state, not katzenqt's. -/
 namespace GroupChatClient.GroupChatKatzenqt1.Persist
 
 open Cborg
-open CryptWalker.Protocols.GroupComm.Common
-open CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member
+open Cryptlib.Protocols.GroupComm.Common
+open Cryptlib.Protocols.GroupComm.GroupChatKatzenqt1.Member
 open Persist
 
 instance : Persist Mode where
@@ -81,7 +81,7 @@ instance : Persist Retention where
     let fs ← fieldsOf t 4
     some ⟨← fieldAt fs 0, ← fieldAt fs 1, ← fieldAt fs 2, ← fieldAt fs 3⟩
 
-instance : Persist CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member.Record where
+instance : Persist Cryptlib.Protocols.GroupComm.GroupChatKatzenqt1.Member.Record where
   toTerm r := .TList #[toTerm r.index, toTerm r.plaintext, toTerm r.control, toTerm r.written,
     toTerm r.settled]
   ofTerm t := do

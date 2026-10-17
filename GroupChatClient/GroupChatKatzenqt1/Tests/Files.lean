@@ -13,8 +13,8 @@ Pigeonhole. -/
 namespace GroupChatClient.GroupChatKatzenqt1.Tests.FilesTests
 
 open GroupChatClient GroupChatClient.Tests GroupChatClient.GroupChatKatzenqt1.Tests.CoreTests
-open CryptWalker.Protocols.GroupComm.Common
-open CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member
+open Cryptlib.Protocols.GroupComm.Common
+open Cryptlib.Protocols.GroupComm.GroupChatKatzenqt1.Member
 open GroupChatClient.GroupChatKatzenqt1.Persist
 open GroupChatClient.GroupChatKatzenqt1.Persist.Persist
 

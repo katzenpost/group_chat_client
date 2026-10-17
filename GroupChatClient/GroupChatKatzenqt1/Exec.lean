@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (C) 2026 David Stainton
 SPDX-License-Identifier: AGPL-3.0-only
 -/
 
-import CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member.Walk
+import Cryptlib.Protocols.GroupComm.GroupChatKatzenqt1.Member.Walk
 import GroupChatClient.Pigeonhole.Box
 import GroupChatClient.Shell
 import GroupChatClient.GroupChatKatzenqt1.Core
@@ -16,8 +16,8 @@ test can step a simulated clock. -/
 
 namespace GroupChatClient.GroupChatKatzenqt1
 
-open CryptWalker.Protocols.GroupComm.Common
-open CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member
+open Cryptlib.Protocols.GroupComm.Common
+open Cryptlib.Protocols.GroupComm.GroupChatKatzenqt1.Member
 open GroupChatClient.Pigeonhole (publish retryMs startOfWriteCap)
 
 /-- Files under the state directory, by name relative to it. -/
