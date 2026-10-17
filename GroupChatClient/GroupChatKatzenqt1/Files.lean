@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (C) 2026 David Stainton
 SPDX-License-Identifier: AGPL-3.0-only
 -/
 
-import CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member.Gcm
+import Cryptlib.Protocols.GroupComm.GroupChatKatzenqt1.Member.Gcm
 
 /-! # Files, and messages too long for a box
 
@@ -14,8 +14,8 @@ cap. -/
 
 namespace GroupChatClient.GroupChatKatzenqt1.Files
 
-open CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member
-open CryptWalker.Protocols.GroupComm.GroupChatKatzenqt1.Member.Cbor
+open Cryptlib.Protocols.GroupComm.GroupChatKatzenqt1.Member
+open Cryptlib.Protocols.GroupComm.GroupChatKatzenqt1.Member.Cbor
 
 structure FileUpload where
   payload : ByteArray
