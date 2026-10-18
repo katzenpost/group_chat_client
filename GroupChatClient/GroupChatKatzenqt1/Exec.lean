@@ -83,6 +83,27 @@ def describe : Action → String
   | .chunkIndexes chat job _ n => s!"{chat}: derive {n} indexes of job {job}'s substream"
   | .readChunk chat _ _ index => s!"{chat}: read substream box {counter index}"
 
+/-- Write `bytes` to the file `name`, or delete it when `none`: what came of it. -/
+def keepFile (st : Store) (chat name : String) (bytes : Option ByteArray) : IO Msg := do
+  try
+    match bytes with
+    | some b => st.write name b
+    | none => st.remove name
+    return .filed chat name none
+  catch e => return .filed chat name (some (toString e))
+
+/-- Write the files a step asks for, before the state it led to is saved, so that no saved state
+names a file not yet there: what came of them, and the step's other actions. A file is deleted
+only once a state no longer naming it is saved, so deletes stay with the others. -/
+def writeFirst (st : Store) (actions : List Action) : IO (List Msg × List Action) := do
+  let mut filed := []
+  let mut rest := []
+  for a in actions do
+    match a with
+    | .file chat name (some bytes) => filed := filed ++ [← keepFile st chat name (some bytes)]
+    | a => rest := rest ++ [a]
+  return (filed, rest)
+
 def perform (b : Backend) (st : Store) (a : Action) : IO Outcome := do
   try
     match a with
@@ -118,13 +139,7 @@ def perform (b : Backend) (st : Store) (a : Action) : IO Outcome := do
       let i ← b.voucherInduct voucher payload who
       discard <| publish b.toBackend vwc box1 i.sealedReply
       return .done (.inducted chat i)
-    | .file chat name bytes =>
-      try
-        match bytes with
-        | some b => st.write name b
-        | none => st.remove name
-        return .done (.filed chat name none)
-      catch e => return .done (.filed chat name (some (toString e)))
+    | .file chat name bytes => return .done (← keepFile st chat name bytes)
     | .load chat job name =>
       try return .done (.loaded chat job (some (← st.read name)))
       catch _ => return .done (.loaded chat job none)

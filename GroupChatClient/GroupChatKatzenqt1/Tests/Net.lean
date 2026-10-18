@@ -28,15 +28,29 @@ structure Net where
   clock : Nat := 0
   /-- Each member's files. -/
   files : List (Nat × List (String × ByteArray)) := []
+  /-- Files a member's state named when it was saved that were not yet there. -/
+  unwritten : List (Nat × String) := []
 
 abbrev NetM := StateT Net IO
 
 def backend (world : IO.Ref Sim.World) : Backend := Sim.backend world
 
-def feed (who : Nat) (m : Msg) : NetM Unit := do
+/-- The files a conversation still reads: its lines', and those of uploads not yet all written. -/
+def needed (c : Chat) : List String :=
+  c.log.filterMap (·.attachment.map (·.file)) ++
+    c.jobs.filterMap fun j => (j.upload.filter fun u => u.sent < u.total).map (·.file)
+
+/-- Step a member's core as the shell does: writing the files the step asks for, then saving its
+state, noting any file it names that is not there yet. -/
+partial def feed (who : Nat) (m : Msg) : NetM Unit := do
   let n ← get
   let (c, as) := step n.cores[who]! m
-  set { n with cores := n.cores.set! who c, queue := n.queue ++ as.toArray.map (who, ·) }
+  let ((filed, as), files) ← Store.withMemory ((n.files.lookup who).getD []) (writeFirst · as)
+  let missing := (c.state.chats.flatMap needed).filter fun f => (files.lookup f).isNone
+  set { n with cores := n.cores.set! who c, queue := n.queue ++ as.toArray.map (who, ·),
+               files := (who, files) :: n.files.filter (·.1 != who),
+               unwritten := n.unwritten ++ missing.map (who, ·) }
+  for m in filed do feed who m
 
 /-- Run one action, or move the clock on; `false` when there is nothing left at all. -/
 def tick (world : IO.Ref Sim.World) : NetM Bool := do
