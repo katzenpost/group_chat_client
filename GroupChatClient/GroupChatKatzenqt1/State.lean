@@ -4,6 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 -/
 
 import GroupChatClient.GroupChatKatzenqt1.Persist.Group
+import GroupChatClient.GroupChatKatzenqt1.Backend
 
 /-! # What a member keeps
 
@@ -86,15 +87,19 @@ inductive Joining
   | awaiting (code : String) (secretKey voucherReadCap box1 : ByteArray)
   deriving Inhabited
 
-/-- Inducting a member whose voucher we were given. -/
+/-- Inducting a member whose voucher we were given. Kept from the moment we are given it, so a
+restart carries on: reading the voucher, sealing the reply, or publishing the one sealed. -/
 structure Inducting where
   voucher : ByteArray
-  payload : ByteArray
-  voucherWriteCap : ByteArray
-  box1 : Index
-  name : String
-  /-- The reply is on its way to box 1. -/
+  /-- The voucher's box 0; empty until read. -/
+  payload : ByteArray := .empty
+  voucherWriteCap : ByteArray := .empty
+  box1 : Index := .empty
+  name : String := ""
+  /-- The reply is being sealed. -/
   sealing : Bool := false
+  /-- The reply, sealed and kept before it is published, so it is published again as it was. -/
+  sealed : Option Inducted := none
   deriving Inhabited
 
 /-- A message a member's `I` box announced, being read from its substream. Their stream is read
@@ -219,13 +224,20 @@ instance : Persist Joining where
       some (.awaiting (← ofTerm code) (← ofTerm sk) (← ofTerm rc) (← ofTerm box1))
     | _ => none
 
+instance : Persist Inducted where
+  toTerm i := .TList #[toTerm i.name, toTerm i.mutatedReadCap, toTerm i.sealedReply]
+  ofTerm t := do
+    let fs ← fieldsOf t 3
+    some ⟨← fieldAt fs 0, ← fieldAt fs 1, ← fieldAt fs 2⟩
+
+/-- One saved before sealed replies were kept has six fields. -/
 instance : Persist Inducting where
   toTerm i := .TList #[toTerm i.voucher, toTerm i.payload, toTerm i.voucherWriteCap,
-    toTerm i.box1, toTerm i.name, toTerm i.sealing]
+    toTerm i.box1, toTerm i.name, toTerm i.sealing, toTerm i.sealed]
   ofTerm t := do
-    let fs ← fieldsOf t 6
+    let fs ← (fieldsOf t 7).orElse fun _ => fieldsOf t 6
     some ⟨← fieldAt fs 0, ← fieldAt fs 1, ← fieldAt fs 2, ← fieldAt fs 3, ← fieldAt fs 4,
-      ← fieldAt fs 5⟩
+      ← fieldAt fs 5, (fieldAt fs 6).getD none⟩
 
 instance : Persist Download where
   toTerm d := .TList #[toTerm d.stream, toTerm d.index, toTerm d.next, toTerm d.readCap,

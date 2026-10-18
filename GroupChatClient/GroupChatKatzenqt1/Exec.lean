@@ -74,7 +74,8 @@ def describe : Action → String
   | .mint chat .. => s!"{chat}: mint a voucher"
   | .awaitReply chat _ _ box1 _ => s!"{chat}: wait for the voucher's reply in box {counter box1}"
   | .readVoucher chat _ => s!"{chat}: read a voucher's box 0"
-  | .induct chat .. => s!"{chat}: seal the reply to a voucher"
+  | .seal chat .. => s!"{chat}: seal the reply to a voucher"
+  | .publishReply chat _ box1 _ => s!"{chat}: publish the reply to a voucher in box {counter box1}"
   | .file chat _ bytes => s!"{chat}: {(bytes.map (s!"keep a file of {·.size} bytes")).getD "delete a file"}"
   | .load chat job _ => s!"{chat}: read job {job}'s message back"
   | .substream chat job => s!"{chat}: new substream for job {job}"
@@ -114,8 +115,9 @@ def perform (b : Backend) (st : Store) (a : Action) : IO Outcome := do
       | .data payload box1 => return .done (.joinerPayload chat voucher vwc payload box1)
       | .notFound => return .retry a retryMs
       | .tombstone _ => return .done (.failed chat "that voucher was withdrawn")
-    | .induct chat voucher payload who vwc box1 =>
-      let i ← b.voucherInduct voucher payload who
+    | .seal chat voucher payload who =>
+      return .done (.sealed chat (← b.voucherInduct voucher payload who))
+    | .publishReply chat vwc box1 i =>
       discard <| publish b.toBackend vwc box1 i.sealedReply
       return .done (.inducted chat i)
     | .file chat name bytes =>
@@ -139,10 +141,11 @@ def perform (b : Backend) (st : Store) (a : Action) : IO Outcome := do
   catch e =>
     let chat := match a with
       | .create c .. | .write c .. | .read c .. | .wake c .. | .scanRead c .. | .walk c ..
-      | .derive c .. | .mint c .. | .awaitReply c .. | .readVoucher c .. | .induct c ..
+      | .derive c .. | .mint c .. | .awaitReply c .. | .readVoucher c .. | .seal c .. | .publishReply c ..
       | .file c .. | .load c .. | .substream c .. | .writeChunk c .. | .chunkIndexes c .. | .readChunk c .. => c
     match a with
-    | .read .. | .scanRead .. | .readChunk .. | .substream .. | .chunkIndexes .. => return .retry a retryMs
+    | .read .. | .scanRead .. | .readChunk .. | .substream .. | .chunkIndexes .. | .publishReply .. =>
+      return .retry a retryMs
     | _ => return .done (.failed chat s!"{describe a} failed: {e}")
 
 end GroupChatClient.GroupChatKatzenqt1
