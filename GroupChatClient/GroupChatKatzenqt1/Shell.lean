@@ -11,7 +11,7 @@ import GroupChatClient.GroupChatKatzenqt1.Exec
 /-! # Running a member
 
 One task owns the core: it takes each message in turn, steps the core, saves the state, shows it,
-and launches the network work the step asks for, each on a task of its own that hands back what
+and only then launches the network work the step asks for, each on a task of its own that hands back what
 came of it. Another task watches the replica epoch. -/
 
 namespace GroupChatClient.GroupChatKatzenqt1
@@ -116,12 +116,18 @@ partial def drive (sh : Shell) : IO Unit := do
   if ← sh.stop.get then return
   log.debug m.describe
   if let .failed _ what := m then log.warning what
-  let (c, actions) := step { (← sh.core.get) with now := ← wallMs } m
+  let before ← sh.core.get
+  let (c, actions) := step { before with now := ← wallMs } m
+  -- Nothing the step asks for goes out before the state that records it is on the disk.
+  if Persist.save c.state != Persist.save before.state then
+    try
+      sh.save c.state
+      sh.writeVouchers c.state
+    catch e =>
+      (sh.log.withModule s!"{sh.app}/store").error s!"saving: {e}; stopping"
+      sh.stop.set true
+      return
   sh.core.set c
-  try
-    sh.save c.state
-    sh.writeVouchers c.state
-  catch e => (sh.log.withModule s!"{sh.app}/store").error s!"saving: {e}"
   sh.display c.state
   for a in actions do launch sh a
   drive sh
