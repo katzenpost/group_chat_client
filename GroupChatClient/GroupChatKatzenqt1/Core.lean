@@ -401,6 +401,13 @@ def startWrite (c : Chat) : CoreM Chat := do
     emit (.write c.name j.id c.writeCap index j.box)
     return { c with jobs := { j with index := some index } :: rest }
 
+/-- Write the control message the member owes, without waiting for something to send: until a
+joiner says where it was introduced, no one can count its stream. -/
+def startControl (c : Chat) : CoreM Chat := do
+  unless c.group.any (·.owesControl) do return c
+  let (out, c) := onGroup c (Group.compose none) []
+  enqueue c out
+
 /-- Hand the new member its reply, once everything owed is written. -/
 def startInduction (c : Chat) : CoreM Chat := do
   let some i := c.inducting | return c
@@ -461,6 +468,7 @@ def startDownloads (c : Chat) : CoreM Unit := do
 /-- Start whatever can start. -/
 def pump : CoreM Unit := do
   for c in (← get).1.state.chats do
+    let c ← startControl c
     let c ← startWrite c
     let c ← startReads c
     let c ← startInduction c

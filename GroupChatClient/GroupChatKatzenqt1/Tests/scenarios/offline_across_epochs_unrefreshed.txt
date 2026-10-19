@@ -24,8 +24,7 @@ show bob g
 
 jobs alice g
 ----
-rewrite to box 0, 259 bytes
-rewrite to box 1, 99 bytes
-rewrite to box 0, 259 bytes
-rewrite to box 1, 99 bytes
+tombstone to box 0, 0 bytes
+rewrite to box 1, 115 bytes
+rewrite to box 1, 115 bytes
 
