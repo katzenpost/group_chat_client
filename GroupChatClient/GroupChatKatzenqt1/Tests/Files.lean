@@ -194,6 +194,23 @@ def removeDeletes : TestM Unit := do
   check "removing a member deletes the files they sent" ok.1
   check "leaving a group deletes its files" ok.2
 
+/-- No saved state names a file not yet on disk: a crash just after saving must not leave a line
+whose file is missing. -/
+def writtenBeforeSaved : TestM Unit := do
+  let (world, net) ← newNet 2 ["alice", "bob"]
+  let pic := bytesOf 20000
+  let note := bytesOf 300 3
+  let (ok, n) ← (do
+    unless ← foundAndJoin world do return false
+    feed 0 (.sendFile "g" "cat.png" pic)
+    feed 0 (.sendFile "g" "note.txt" note)
+    let a ← runUntil world fun n => received n 1 "g" "cat.png" && received n 1 "g" "note.txt"
+    let b ← runUntil world fun n => (chatOf n 0 "g").any fun (c : Chat) => c.jobs.isEmpty
+    return a && b).run net
+  check "bob receives both files" ok
+  check "every file a saved state named was already there" n.unwritten.isEmpty
+    fun _ => s!"{n.unwritten}"
+
 def tests : TestM Unit := do
   encoding
   saving
@@ -203,5 +220,6 @@ def tests : TestM Unit := do
   restartMidUpload
   limits
   removeDeletes
+  writtenBeforeSaved
 
 end GroupChatClient.GroupChatKatzenqt1.Tests.FilesTests
