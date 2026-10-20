@@ -1,0 +1,41 @@
+# Bob joins and speaks before alice's Introduction of him is written, so he reads it after the
+# last thing he said. He still says where he was introduced, so alice can credit what he
+# acknowledges and acknowledge him.
+
+create alice g
+join bob g
+run
+invite alice g bob
+fail-next alice Write
+run 4
+hold alice
+run 2
+send bob g hello alice
+run
+release alice
+run
+send alice g read you
+run
+show alice g
+----
+— a new group: adding a member's voucher code adds them
+— reading the voucher
+— added ~bob: they now read everything said in this group
+bob: hello alice
+alice ✓: read you
+
+show bob g
+----
+— minting a voucher
+— give the voucher code to a member of the group (it is also in voucher-g.txt)
+— joined the group
+bob ✓✓: hello alice
+alice: read you
+
+acked alice g
+----
+bob:0
+
+acked bob g
+----
+alice:1

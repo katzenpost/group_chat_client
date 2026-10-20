@@ -30,6 +30,7 @@ held asks and hears nothing until it is released.
 | `hold WHO`, `release WHO` | WHO's traffic stops, or goes again |
 | `epoch` | the replicas' epoch passes, and every member is told |
 | `fail-writes N` | the next N box writes fail |
+| `fail-next WHO KIND` | WHO's next action of KIND (`Write`, `Mint`, …) fails as the network fails it |
 | `show WHO GROUP` | WHO's conversation: notices after `—`, messages after their sender, ours with `…`, `✓` or `✓✓` |
 | `members WHO GROUP` | whom WHO reads in the group |
 | `acked WHO GROUP` | how far each member has acknowledged WHO's stream, as WHO credits it |
@@ -65,6 +66,8 @@ structure World where
   files : List (Nat × List (String × ByteArray)) := []
   /-- Each step after which a member's group did not load as it was saved. -/
   unsaved : Array String := #[]
+  /-- For each member, the kind of its next action to fail. -/
+  failNext : List (Nat × String) := []
 
 abbrev ScM := StateT World IO
 
@@ -92,13 +95,44 @@ def nameOf (k : Key) : ScM String := do
       if c.group.any (·.me == k) then return m.name
   return "?"
 
+/-- An action's kind, as `fail-next` names it. -/
+def kindOf : Action → String
+  | .create .. => "Create" | .write .. => "Write" | .read .. => "Read" | .wake .. => "Wake"
+  | .scanRead .. => "ScanRead" | .walk .. => "Walk" | .derive .. => "Derive" | .mint .. => "Mint"
+  | .awaitReply .. => "AwaitReply" | .readVoucher .. => "ReadVoucher" | .seal .. => "Seal"
+  | .publishReply .. => "PublishReply"
+  | .file .. => "File" | .load .. => "Load" | .substream .. => "Substream"
+  | .writeChunk .. => "WriteChunk" | .chunkIndexes .. => "ChunkIndexes" | .readChunk .. => "ReadChunk"
+
+def injected {α : Type} : IO α := throw (IO.userError "injected")
+
+/-- A network and a disk on which everything fails. -/
+def failing : Backend where
+  newKeypair := injected
+  writeBox _ _ _ := injected
+  readBox _ _ := injected
+  nextIndex _ := injected
+  replicaEpoch := injected
+  maxPlaintext := injected
+  voucherMint _ _ := injected
+  voucherDeriveStream _ := injected
+  voucherInduct _ _ _ := injected
+  voucherOpen _ _ _ := injected
+
+def failingStore : Store where
+  write _ _ := injected
+  read _ := injected
+  remove _ := injected
+
 /-- Carry out the first action of a member not held; `false` if there is none. -/
 def act : ScM Bool := do
   let w ← get
   let some k := w.queue.findIdx? (!w.held.contains ·.1) | return false
   let some (i, a) := w.queue[k]? | return false
-  set { w with queue := w.queue.eraseIdx! k }
-  let (outcome, files) ← Store.withMemory ((w.files.lookup i).getD []) (perform (Sim.backend w.sim) · a)
+  let fail := w.failNext.contains (i, kindOf a)
+  set { w with queue := w.queue.eraseIdx! k, failNext := if fail then w.failNext.erase (i, kindOf a) else w.failNext }
+  let (outcome, files) ← Store.withMemory ((w.files.lookup i).getD []) fun st =>
+    if fail then perform failing failingStore a else perform (Sim.backend w.sim) st a
   modify fun w => { w with files := (i, files) :: w.files.filter (·.1 != i) }
   match outcome with
   | .done m => feed i m
@@ -223,6 +257,10 @@ def command (words : List String) : ScM (List String) := do
     modify fun s => { s with epoch := n }
     (← get).sim.modify fun s => { s with epoch := some n }
     for i in List.range (← get).members.size do feed i (.epoch n)
+    return []
+  | ["fail-next", w, kind] =>
+    let i ← who w
+    modify fun s => { s with failNext := (i, kind) :: s.failNext.filter (·.1 != i) }
     return []
   | ["fail-writes", n] => (← get).sim.modify fun s => { s with failWrites := n.toNat! }; return []
   | ["show", w, g] => showChat (← who w) g

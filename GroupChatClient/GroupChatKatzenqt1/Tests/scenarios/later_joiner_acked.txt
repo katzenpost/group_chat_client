@@ -36,5 +36,5 @@ alice:1 bob:1
 
 acked bob g
 ----
-alice:1 carol:1
+alice:2 carol:2
 
