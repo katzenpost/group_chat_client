@@ -166,6 +166,46 @@ def restart : TestM Unit := do
     runUntil world fun n => says n 1 "g" "after" && says n 0 "g" "bob after").run net
   check "alice carries on after restarting" ok
 
+/-- Member `who` stops, losing what it had under way, and starts again from its saved state. -/
+def restartMember (net : Net) (who : Nat) : Option Net := do
+  let s : State ← load (save net.cores[who]!.state)
+  let (core, actions) := resume .plain s 1530
+  some { net with cores := net.cores.set! who core,
+                  queue := net.queue.filter (·.1 != who) ++ actions.toArray.map (who, ·),
+                  later := net.later.filter (·.2.1 != who) }
+
+/-- Whether the next action is Alice's, publishing the reply to a voucher. -/
+def publishingReply (n : Net) : Bool :=
+  n.queue[0]?.any fun ((who, a) : Nat × Action) => who == 0 && match a with
+    | .publishReply .. => true
+    | _ => false
+
+/-- Alice restarts while inducting Bob: before the voucher is read, and after the reply is
+published but before she has heard so. Either way Bob joins, and Alice adds him. -/
+def restartMidInduction : TestM Unit := do
+  for (point, early) in [("before the voucher is read", true),
+      ("after the reply is published", false)] do
+    let (world, net) ← newNet 2 ["alice", "bob"]
+    let (code, net) ← (show NetM (Option String) from do
+      feed 0 (.create "g")
+      feed 1 (.join "g")
+      discard <| runUntil world fun n => (code? n 1 "g").isSome
+      return code? (← get) 1 "g").run net
+    let some code := code | check s!"bob mints a voucher ({point})" false
+    let (ok, net) ← (show NetM Bool from do
+      feed 0 (.induct "g" code)
+      if early then return true
+      unless ← runUntil world publishingReply do return false
+      let n ← get
+      let some (_, a) := n.queue[0]? | return false
+      set { n with queue := n.queue.extract 1 n.queue.size }
+      discard <| Store.withMemory ((n.files.lookup 0).getD []) (perform (backend world) · a)
+      return true).run net
+    check s!"alice gets to the point of restarting ({point})" ok
+    let some net := restartMember net 0 | check s!"alice's state loads ({point})" false
+    let (ok, _) ← (runUntil world fun n => joined n 1 "g" && noticed n 0 "g" "added ~bob").run net
+    check s!"alice restarting {point} still adds bob" ok
+
 def failingWrites : TestM Unit := do
   let (world, net) ← newNet 2 ["alice", "bob"]
   let (ok, _) ← (do
@@ -222,6 +262,7 @@ def tests : TestM Unit := do
   removeAndLeave
   rename
   restart
+  restartMidInduction
   failingWrites
   backfill
 

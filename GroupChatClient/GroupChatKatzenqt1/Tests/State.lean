@@ -33,6 +33,17 @@ def tests : TestM Unit := do
   let s : State := { me := "alice", chats := [{ name := "g", log := [l] }] }
   check "a state with times saves and loads" ((load (save s) : Option State).any fun b =>
     b.chats.any fun c => c.log.any (·.time == some 1792055520000))
+  let sealed : Inducted := { name := "carol", mutatedReadCap := bob, sealedReply := bob }
+  let i : Inducting := { voucher := bob, payload := bob, sealed := some sealed }
+  let iBack : Option Inducting := ofTerm (toTerm i)
+  check "an induction saves and loads with its sealed reply" (iBack.any fun b =>
+    b.sealed.any (·.name == "carol") && b.payload.data == bob.data)
+  let oldI := match toTerm i with
+    | .TList fs => Cborg.Term.TList (fs.extract 0 6)
+    | t => t
+  let oldIBack : Option Inducting := ofTerm oldI
+  check "an induction saved before sealed replies were kept loads, with none" (oldIBack.any fun b =>
+    b.sealed.isNone && b.voucher.data == bob.data)
   -- Stamping.
   let core : Core := { present := .plain, state := { me := "alice" }, now := 1000 }
   let (core, _) := step core (.create "g")

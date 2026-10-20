@@ -53,8 +53,10 @@ inductive Action
       (writeCap : ByteArray)
   /-- Read a voucher's box 0: `joinerPayload`. -/
   | readVoucher (chat : String) (voucher : ByteArray)
-  /-- Seal the reply and publish it to box 1: `inducted`. -/
-  | induct (chat : String) (voucher payload whoReply voucherWriteCap : ByteArray) (box1 : Index)
+  /-- Seal the reply: `sealed`. -/
+  | seal (chat : String) (voucher payload whoReply : ByteArray)
+  /-- Publish the sealed reply to box 1, retrying until it is written: `inducted`. -/
+  | publishReply (chat : String) (voucherWriteCap : ByteArray) (box1 : Index) (i : Inducted)
   /-- Write `bytes` to the file `name` under the state directory, or delete it when `none`:
   `filed`. -/
   | file (chat : String) (name : String) (bytes : Option ByteArray)
@@ -97,6 +99,7 @@ inductive Msg
   | minted (chat : String) (m : Minted) (box1 : Index)
   | opened (chat : String) (o : Opened)
   | joinerPayload (chat : String) (voucher voucherWriteCap payload : ByteArray) (box1 : Index)
+  | sealed (chat : String) (i : Inducted)
   | inducted (chat : String) (i : Inducted)
   | epoch (n : Nat)
   | failed (chat : String) (what : String)
@@ -128,6 +131,7 @@ def Msg.mapChat (f : String → String) : Msg → Msg
   | .minted c m box1 => .minted (f c) m box1
   | .opened c o => .opened (f c) o
   | .joinerPayload c voucher vwc payload box1 => .joinerPayload (f c) voucher vwc payload box1
+  | .sealed c i => .sealed (f c) i
   | .inducted c i => .inducted (f c) i
   | .failed c what => .failed (f c) what
   | .filed c name error => .filed (f c) name error
@@ -401,11 +405,12 @@ def startWrite (c : Chat) : CoreM Chat := do
 def startInduction (c : Chat) : CoreM Chat := do
   let some i := c.inducting | return c
   let some g := c.group | return c
-  if i.sealing || c.jobs.any (·.token.isSome) then return c
+  if i.payload.size = 0 || i.sealing || i.sealed.isSome || c.jobs.any (·.token.isSome) then
+    return c
   let name ← me
   let who := ReplyWho.ofJoinReply (g.reply c.nextWrite) fun key =>
     if key == g.me then some name else c.names.get? key
-  emit (.induct c.name i.voucher i.payload (ReplyWho.encode who) i.voucherWriteCap i.box1)
+  emit (.seal c.name i.voucher i.payload (ReplyWho.encode who))
   return { c with inducting := some { i with sealing := true } }
 
 def blobOf (chat : String) (job : Nat) : CoreM (Option ByteArray) :=
@@ -576,11 +581,16 @@ def handle : Msg → CoreM Unit
     | none => return c.notice "that is not a voucher code"
     | some voucher =>
       emit (.readVoucher name voucher)
-      return c.notice "reading the voucher"
-  | .joinerPayload name voucher vwc payload box1 => withChat name fun c => do
+      return { c with inducting := some { voucher } }.notice "reading the voucher"
+  | .joinerPayload name _ vwc payload box1 => withChat name fun c => do
+    let some i := c.inducting | return c
     let (out, c) := onGroup c Group.beginInduction []
     let c ← enqueue c out
-    return { c with inducting := some { voucher, payload, voucherWriteCap := vwc, box1, name := "" } }
+    return { c with inducting := some { i with payload, voucherWriteCap := vwc, box1 } }
+  | .sealed name s => withChat name fun c => do
+    let some i := c.inducting | return c
+    emit (.publishReply name i.voucherWriteCap i.box1 s)
+    return { c with inducting := some { i with sealed := some s } }
   | .inducted name i => withChat name fun c => do
     let who := sanitize i.name
     let (o, c) := onGroup c (Group.introduceNow who i.mutatedReadCap) default
@@ -812,8 +822,9 @@ def step (c : Core) (m : Msg) : Core × List Action :=
   let ((), (c, as)) := (do Core.handle m; Core.pump).run (c, #[])
   ({ c with state := stamp before c.now c.state }, as.toList)
 
-/-- Begin again after a restart: whatever was under way is started afresh. An induction cannot
-be, since its reply may have gone; it is given up, and the voucher has to be given again. -/
+/-- Begin again after a restart: whatever was under way is started afresh. An induction carries
+on from where it was: the voucher is read, the reply sealed, or the reply kept when it was sealed
+published again. -/
 def resume (present : Presentation) (s : State) (maxPlaintext : Nat) (now : Nat := 0) :
     Core × List Action :=
   let go : CoreM Unit := do
@@ -825,10 +836,13 @@ def resume (present : Presentation) (s : State) (maxPlaintext : Nat) (now : Nat 
       | some .minting => Core.emit (.mint c.name c.writeCap (← Core.me))
       | some (.awaiting _ sk rc box1) => Core.emit (.awaitReply c.name sk rc box1 c.writeCap)
       | none => pure ()
-      if c.inducting.isSome then
-        let c := (Core.onGroup c (do if (← get).ledger.holding then Group.cancelInduction) ()).2
-        Core.setChat ({ c with inducting := none }.notice
-          "adding a member was interrupted: give their voucher code again")
+      match c.inducting with
+      | some { sealed := some s, voucherWriteCap, box1, .. } =>
+        Core.emit (.publishReply c.name voucherWriteCap box1 s)
+      | some i =>
+        if i.payload.size = 0 then Core.emit (.readVoucher c.name i.voucher)
+        else Core.setChat { c with inducting := some { i with sealing := false } }
+      | none => pure ()
     Core.pump
   let ((), (c, as)) := go.run ({ state := s, maxPlaintext, now, present }, #[])
   ({ c with state := stamp s now c.state }, as.toList)
