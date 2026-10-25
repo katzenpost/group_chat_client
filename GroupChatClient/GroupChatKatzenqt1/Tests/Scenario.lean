@@ -228,8 +228,8 @@ def codeOf (i : Nat) (group : String) : ScM (Option String) := do
 
 def command (words : List String) : ScM (List String) := do
   match words with
-  | ["create", w, g] => feed (← who w) (.create g); return []
-  | ["join", w, g] => feed (← who w) (.join g); return []
+  | ["create", w, g] => feed (← who w) (.create g none); return []
+  | ["join", w, g] => feed (← who w) (.join g none); return []
   | "invite" :: w :: g :: new :: rest =>
     let some code ← codeOf (← who new) (rest.headD g) | return [s!"{new} has no voucher code"]
     feed (← who w) (.induct g code)

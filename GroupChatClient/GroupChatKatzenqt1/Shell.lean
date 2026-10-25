@@ -22,8 +22,8 @@ open GroupChatClient.GroupChatKatzenqt1.Persist
 open Logger
 
 def Msg.describe : Msg → String
-  | .create chat => s!"{chat}: create"
-  | .join chat => s!"{chat}: join"
+  | .create chat me => s!"{chat}: create{(me.map (s!" as " ++ ·)).getD ""}"
+  | .join chat me => s!"{chat}: join{(me.map (s!" as " ++ ·)).getD ""}"
   | .induct chat _ => s!"{chat}: add a member"
   | .send chat text => s!"{chat}: send {text.length} characters"
   | .sendFile chat _ bytes => s!"{chat}: send a file of {bytes.size} bytes"

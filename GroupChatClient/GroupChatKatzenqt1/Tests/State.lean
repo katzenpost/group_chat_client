@@ -44,14 +44,22 @@ def tests : TestM Unit := do
   let oldIBack : Option Inducting := ofTerm oldI
   check "an induction saved before sealed replies were kept loads, with none" (oldIBack.any fun b =>
     b.sealed.isNone && b.voucher.data == bob.data)
+  let named : Chat := { name := "g", me := some "Ali" }
+  check "a chat saves and loads with our name in it"
+    ((ofTerm (toTerm named) : Option Chat).any (·.me == some "Ali"))
+  let oldChat := match toTerm named with
+    | .TList fs => Cborg.Term.TList (fs.extract 0 12)
+    | t => t
+  check "a chat saved before it kept our name loads, with none"
+    ((ofTerm oldChat : Option Chat).any fun c => c.me.isNone && c.name == "g")
   -- Stamping.
   let core : Core := { present := .plain, state := { me := "alice" }, now := 1000 }
-  let (core, _) := step core (.create "g")
+  let (core, _) := step core (.create "g" none)
   -- A second group of that name is refused, with a notice: the line this step adds.
-  let (core, _) := step { core with now := 2000 } (.create "g")
+  let (core, _) := step { core with now := 2000 } (.create "g" none)
   check "what a step adds is stamped with the time now" ((core.state.chat? "g").any fun c =>
     c.log.length == 1 && c.log.all (·.time == some 2000))
-  let (core, _) := step { core with now := 3000 } (.create "g")
+  let (core, _) := step { core with now := 3000 } (.create "g" none)
   check "and what was there keeps its time" ((core.state.chat? "g").any fun c =>
     (c.log.map (·.time)) == [some 2000, some 3000])
 

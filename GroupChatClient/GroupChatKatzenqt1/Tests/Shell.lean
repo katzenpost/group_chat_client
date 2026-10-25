@@ -52,7 +52,7 @@ def tests : TestM Unit := do
     -- A step whose state cannot be saved launches nothing, and stops the shell.
     let made ← IO.mkRef 0
     let sh ← shell (dir / "no-such-dir" / "state") made
-    drive sh [.create "g"] made
+    drive sh [.create "g" none] made
     let n ← made.get
     check "a step not saved makes no stream" (n == 0) fun _ => s!"{n} made"
     check "a step not saved stops the shell" (← sh.stop.get)
@@ -60,7 +60,7 @@ def tests : TestM Unit := do
     -- A step that is saved goes out once the state is on the disk.
     let made ← IO.mkRef 0
     let sh ← shell (dir / "state") made
-    drive sh [.create "g"] made
+    drive sh [.create "g" none] made
     check "a step saved makes its stream" ((← made.get) == 1)
     let saved : Option State := load (← IO.FS.readBinFile (dir / "state"))
     check "the saved state has the group" (saved.any (·.chats.any (·.name == "g")))

@@ -73,8 +73,10 @@ inductive Action
   | readChunk (chat : String) (stream : Key) (readCap : ByteArray) (index : Index)
 
 inductive Msg
-  | create (chat : String)
-  | join (chat : String)
+  /-- Found a group, where we go by `me`; with `none`, by the state's name. -/
+  | create (chat : String) (me : Option String)
+  /-- Join a group, where we go by `me`; with `none`, by the state's name. -/
+  | join (chat : String) (me : Option String)
   | induct (chat : String) (code : String)
   | send (chat : String) (text : String)
   /-- Send a file, named `name`. -/
@@ -140,7 +142,7 @@ def Msg.mapChat (f : String → String) : Msg → Msg
   | .wroteChunk c job n next => .wroteChunk (f c) job n next
   | .chunkIndexes c job start indexes => .chunkIndexes (f c) job start indexes
   | .readChunk c stream index outcome => .readChunk (f c) stream index outcome
-  | m@(.create _) | m@(.join _) | m@(.epoch _) => m
+  | m@(.create ..) | m@(.join ..) | m@(.epoch _) => m
 
 /-- What is under way on the network; not saved, since a restart begins it again. -/
 structure Flight where
@@ -207,6 +209,9 @@ def setChat (c : Chat) : CoreM Unit :=
   modify fun (core, as) => ({ core with state := core.state.setChat c }, as)
 
 def me : CoreM String := return (← get).1.state.me
+
+/-- Our name in the group: the one we gave it, or else the state's. -/
+def meIn (c : Chat) : CoreM String := return c.me.getD (← me)
 
 def modifyFlight (f : Flight → Flight) : CoreM Unit :=
   modify fun (c, as) => ({ c with flight := f c.flight }, as)
@@ -414,7 +419,7 @@ def startInduction (c : Chat) : CoreM Chat := do
   let some g := c.group | return c
   if i.payload.size = 0 || i.sealing || i.sealed.isSome || c.jobs.any (·.token.isSome) then
     return c
-  let name ← me
+  let name ← meIn c
   let who := ReplyWho.ofJoinReply (g.reply c.nextWrite) fun key =>
     if key == g.me then some name else c.names.get? key
   emit (.seal c.name i.voucher i.payload (ReplyWho.encode who))
@@ -540,24 +545,24 @@ def readResult : ReadOutcome → ReadResult × Option Index
 /-! ## Messages -/
 
 def handle : Msg → CoreM Unit
-  | .create name => do
+  | .create name own => do
     if ← formerly name then return
     if let some c ← getChat name then
       setChat (c.notice s!"you already have a group called {name}")
       return
-    setChat { name }
+    setChat { name, me := own }
     emit (.create name false)
-  | .join name => do
+  | .join name own => do
     if ← formerly name then return
     if let some c ← getChat name then
       setChat (c.notice s!"you already have a group called {name}: to join someone else's group, give it a name of its own")
       return
-    setChat { name, joining := some .minting }
+    setChat { name, me := own, joining := some .minting }
     emit (.create name true)
   | .created name joining kp => withChat name fun c => do
     let c := { c with writeCap := kp.writeCap, nextWrite := kp.first }
     if joining then
-      emit (.mint name kp.writeCap (← me))
+      emit (.mint name kp.writeCap (← meIn c))
       return c.notice "minting a voucher"
     return { c with group := some (Group.found kp.readCap [kp.readCap]) }.notice
       (← get).1.present.newGroup
@@ -841,7 +846,7 @@ def resume (present : Presentation) (s : State) (maxPlaintext : Nat) (now : Nat 
         Core.emit (.create c.name c.joining.isSome)
         continue
       match c.joining with
-      | some .minting => Core.emit (.mint c.name c.writeCap (← Core.me))
+      | some .minting => Core.emit (.mint c.name c.writeCap (← Core.meIn c))
       | some (.awaiting _ sk rc box1) => Core.emit (.awaitReply c.name sk rc box1 c.writeCap)
       | none => pure ()
       match c.inducting with

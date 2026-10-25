@@ -128,6 +128,9 @@ structure Chat where
   inducting : Option Inducting := none
   nextId : Nat := 0
   downloads : List Download := []
+  /-- Our name in this group, given when we founded or joined it; `none` for one saved before,
+  where we go by the state's. -/
+  me : Option String := none
   deriving Inhabited
 
 structure State where
@@ -246,16 +249,16 @@ instance : Persist Download where
     let fs ← fieldsOf t 5
     some ⟨← fieldAt fs 0, ← fieldAt fs 1, ← fieldAt fs 2, ← fieldAt fs 3, ← fieldAt fs 4⟩
 
-/-- A chat saved before downloads has eleven fields. -/
+/-- A chat saved before downloads has eleven fields, and one saved before its own name twelve. -/
 instance : Persist Chat where
   toTerm c := .TList #[toTerm c.name, toTerm c.writeCap, toTerm c.nextWrite, toTerm c.group,
     toTerm c.cursors, toTerm c.names, toTerm c.jobs, toTerm c.log, toTerm c.joining,
-    toTerm c.inducting, toTerm c.nextId, toTerm c.downloads]
+    toTerm c.inducting, toTerm c.nextId, toTerm c.downloads, toTerm c.me]
   ofTerm t := do
-    let fs ← (fieldsOf t 12).orElse fun _ => fieldsOf t 11
+    let fs ← ((fieldsOf t 13).orElse fun _ => fieldsOf t 12).orElse fun _ => fieldsOf t 11
     some ⟨← fieldAt fs 0, ← fieldAt fs 1, ← fieldAt fs 2, ← fieldAt fs 3, ← fieldAt fs 4,
       ← fieldAt fs 5, ← fieldAt fs 6, ← fieldAt fs 7, ← fieldAt fs 8, ← fieldAt fs 9,
-      ← fieldAt fs 10, (fieldAt fs 11).getD []⟩
+      ← fieldAt fs 10, (fieldAt fs 11).getD [], (fieldAt fs 12).getD none⟩
 
 instance : Persist State where
   toTerm s := .TList #[toTerm s.me, toTerm s.chats]
