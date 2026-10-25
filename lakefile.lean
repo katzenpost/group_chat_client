@@ -2,6 +2,7 @@ import Lake
 open Lake DSL System
 
 package group_chat_client where
+  version := v!"0.1.0"
   leanOptions := #[⟨`autoImplicit, false⟩, ⟨`relaxedAutoImplicit, false⟩]
 
 require Logger from git "https://github.com/katzenpost/Logger.git" @ "61f4fc02ffa00401d59d98f25feda499f26b10e2"
