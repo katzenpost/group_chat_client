@@ -9,8 +9,6 @@ user interface. It drives the member state machine of
 ## Layout
 
 ```
-c/
-  fsync.c                fsync(2), which Lean's standard library lacks, for Shell.lean
 GroupChatClient/
   Pigeonhole/            boxes, whatever group protocol is spoken
     Backend.lean         what a client asks of Pigeonhole
@@ -36,12 +34,12 @@ GroupChatClient/
   Tests/                 the test runner, and what the protocols' tests share
 ```
 
-`c/fsync.c` is the package's only C. The client's state is saved by writing a temporary file,
-calling `fsync` on it, renaming it over the old one and calling `fsync` on the directory, so that
-a crash or a power cut leaves the old state or the new one, never part of either. Lean's
-`IO.FS.Handle.flush` only hands Lean's buffer to the kernel, so `Shell.fsync` calls `fsync(2)`
-through this file. `lakefile.lean` compiles it with the system's C compiler into the static
-library `group_chat_client_ffi`, which every app using this package links in.
+The client's state is saved by writing a temporary file, calling `fsync` on it, renaming it over
+the old one and calling `fsync` on the directory, so that a crash or a power cut leaves the old
+state or the new one, never part of either. Lean's `IO.FS.Handle.flush` only hands Lean's buffer
+to the kernel, so `Shell.replacePrivate` calls `fsync(2)` through
+[lean_os](https://github.com/katzenpost/lean_os), which has the operating system calls Lean's
+standard library lacks. The package itself is all Lean.
 
 Each group protocol has a directory of its own, named as in Cryptlib's
 `Protocols/GroupComm/`. What is outside these directories never imports one, and none imports
@@ -53,7 +51,8 @@ and its controls.
 ## Building and testing
 
 Building needs Lean, the version in `lean-toolchain`, from
-[elan](https://github.com/leanprover/elan), and a C compiler, `cc`, for `c/fsync.c`.
+[elan](https://github.com/leanprover/elan), and Rust, from [rustup](https://rustup.rs), for the
+Rust inside lean_os and lean_unix_socket, which Lake builds with cargo.
 
 ```
 make build

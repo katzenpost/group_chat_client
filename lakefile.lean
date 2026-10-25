@@ -10,6 +10,8 @@ require thinclient from git "https://github.com/katzenpost/thin_client.git" @ "c
 
 require lean_unix_socket from git "https://github.com/katzenpost/lean_unix_socket.git" @ "4bbfd6bb9df6bc9ce0d31252afff86d48683c9f2"
 
+require lean_os from git "https://github.com/katzenpost/lean_os.git" @ "d523006fd3b4cc45a9813687331070d1097d247e"
+
 -- Last, so that its pin wins over the older ones its dependents carry.
 require cryptlib from git "https://github.com/katzenpost/cryptlib.git" @ "6f651738d26db5ac18dd5670bf501cfc63723175"
 
@@ -19,12 +21,3 @@ lean_lib GroupChatClient where
 
 lean_exe «group-chat-client-test» where
   root := `GroupChatClient.Tests.Main
-
-/-- `fsync`, which Lean's standard library does not offer. -/
-target fsync.o pkg : FilePath := do
-  let oFile := pkg.buildDir / "c" / "fsync.o"
-  let srcJob ← inputTextFile <| pkg.dir / "c" / "fsync.c"
-  buildO oFile srcJob #["-I", (← getLeanIncludeDir).toString, "-O2"] #["-fPIC"] "cc" getLeanTrace
-
-extern_lib group_chat_client_ffi pkg := do
-  buildStaticLib (pkg.staticLibDir / nameToStaticLib "group_chat_client_ffi") #[← fsync.o.fetch]
