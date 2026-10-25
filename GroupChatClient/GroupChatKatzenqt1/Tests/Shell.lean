@@ -47,7 +47,7 @@ def tests : TestM Unit := do
     let back ← IO.FS.readBinFile path
     check "a file replaced holds what was written last" (back == "second".toUTF8)
     check "no temporary file is left" !(← (path.addExtension "tmp").pathExists)
-    let missing ← try fsync (dir / "missing"); pure false catch _ => pure true
+    let missing ← try LeanOs.fsync (dir / "missing"); pure false catch _ => pure true
     check "syncing what is not there fails" missing
     -- A step whose state cannot be saved launches nothing, and stops the shell.
     let made ← IO.mkRef 0

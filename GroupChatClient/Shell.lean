@@ -4,6 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 -/
 
 import Std.Time
+import LeanOs
 
 /-! # What every shell needs: a clock, sleeping until stopped, and private files -/
 
@@ -32,11 +33,6 @@ partial def nap (stop : IO.Ref Bool) (ms : Nat) : IO Bool := do
 /-- Readable and writable by the user alone. -/
 def private_ : IO.FileRight := { user := { read := true, write := true } }
 
-@[extern "gcc_fsync"] private opaque fsyncPath (path : @& String) : IO Unit
-
-/-- Have what was written to the file or directory at `path` reach the disk. -/
-def fsync (path : System.FilePath) : IO Unit := fsyncPath path.toString
-
 /-- Write `bytes` to a file only the user may read, which then takes the place of `path`: on the
 disk, whole, by the time this returns. -/
 def replacePrivate (path : System.FilePath) (bytes : ByteArray) : IO Unit := do
@@ -45,9 +41,9 @@ def replacePrivate (path : System.FilePath) (bytes : ByteArray) : IO Unit := do
   IO.setAccessRights tmp private_
   h.write bytes
   h.flush
-  fsync tmp
+  LeanOs.fsync tmp
   IO.FS.rename tmp path
-  fsync <| match path.parent with
+  LeanOs.fsync <| match path.parent with
     | some dir => if dir.toString.isEmpty then "." else dir
     | none => "."
 
