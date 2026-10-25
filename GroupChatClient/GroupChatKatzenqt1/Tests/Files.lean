@@ -168,7 +168,7 @@ def restartMidUpload : TestM Unit := do
 def limits : TestM Unit := do
   let (world, net) ← newNet 2 ["alice", "bob"]
   let (ok, _) ← (do
-    feed 0 (.create "g")
+    feed 0 (.create "g" none)
     discard <| runUntil world fun n => joined n 0 "g"
     feed 0 (.sendFile "g" "huge.bin" (ByteArray.mk (Array.replicate (Files.maxFile + 1) 0)))
     let n : Net ← get

@@ -32,8 +32,8 @@ def newNet (n : Nat) (names : List String) : IO (IO.Ref Sim.World × Net) := do
 
 /-- Alice founds "g", Bob joins with a voucher Alice inducts. -/
 def foundAndJoin (world : IO.Ref Sim.World) : NetM Bool := do
-  feed 0 (.create "g")
-  feed 1 (.join "g")
+  feed 0 (.create "g" none)
+  feed 1 (.join "g" none)
   unless ← runUntil world fun n => (code? n 1 "g").isSome do return false
   let some code := code? (← get) 1 "g" | return false
   feed 0 (.induct "g" code)
@@ -61,12 +61,29 @@ def twoMembers : TestM Unit := do
   let names := (net.cores[0]!.state.chat? "g").map fun (c : Chat) => c.names.values
   check "alice knows bob by name" (names.any fun (ns : List String) => ns.contains "bob")
 
+/-- Each names themselves in the group as they found or join it, and goes by that there. -/
+def ownNames : TestM Unit := do
+  let (world, net) ← newNet 2 ["alice", "bob"]
+  let (ok, net) ← (do
+    feed 0 (.create "g" (some "Ali"))
+    feed 1 (.join "g" (some "Bo"))
+    unless ← runUntil world fun n => (code? n 1 "g").isSome do return false
+    let some code := code? (← get) 1 "g" | return false
+    feed 0 (.induct "g" code)
+    runUntil world fun n => joined n 1 "g" && noticed n 0 "g" "added ~Bo").run net
+  check "bob joins as the name he gave" ok
+  let names (i : Nat) := ((net.cores[i]!.state.chat? "g").map fun (c : Chat) => c.names.values).getD []
+  check "alice knows him by it" ((names 0).contains "Bo" && !(names 0).contains "bob") fun _ => toString (names 0)
+  check "and bob knows alice by the name she gave" ((names 1).contains "Ali" && !(names 1).contains "alice")
+    fun _ => toString (names 1)
+  check "each group keeps its member's name" ((net.cores[1]!.state.chat? "g").any (·.me == some "Bo"))
+
 def threeMembers : TestM Unit := do
   let (world, net) ← newNet 3 ["alice", "bob", "carol"]
   let (ok, _) ← (do
     unless ← foundAndJoin world do return (false, false)
     -- Carol joins through Bob; Alice learns of her from Bob's Introduction.
-    feed 2 (.join "g")
+    feed 2 (.join "g" none)
     unless ← runUntil world fun n => (code? n 2 "g").isSome do return (false, false)
     let some code := code? (← get) 2 "g" | return (false, false)
     feed 1 (.induct "g" code)
@@ -84,7 +101,7 @@ def removeAndLeave : TestM Unit := do
   let (world, net) ← newNet 3 ["alice", "bob", "carol"]
   let (ok, _) ← (do
     unless ← foundAndJoin world do return (false, false, false, false, false)
-    feed 2 (.join "g")
+    feed 2 (.join "g" none)
     unless ← runUntil world fun n => (code? n 2 "g").isSome do return (false, false, false, false, false)
     let some code := code? (← get) 2 "g" | return (false, false, false, false, false)
     feed 0 (.induct "g" code)
@@ -126,7 +143,7 @@ def rename : TestM Unit := do
     feed 0 (.rename "g" "friends")
     let n ← get
     let renamed := (chatOf n 0 "g").isNone && noticed n 0 "friends" "renamed from g"
-    feed 0 (.create "g")
+    feed 0 (.create "g" none)
     let refused := (chatOf (← get) 0 "g").isNone &&
       noticed (← get) 0 "friends" "g was this group's name"
     feed 1 (.send "g" "from bob")
@@ -187,8 +204,8 @@ def restartMidInduction : TestM Unit := do
       ("after the reply is published", false)] do
     let (world, net) ← newNet 2 ["alice", "bob"]
     let (code, net) ← (show NetM (Option String) from do
-      feed 0 (.create "g")
-      feed 1 (.join "g")
+      feed 0 (.create "g" none)
+      feed 1 (.join "g" none)
       discard <| runUntil world fun n => (code? n 1 "g").isSome
       return code? (← get) 1 "g").run net
     let some code := code | check s!"bob mints a voucher ({point})" false
@@ -238,10 +255,10 @@ def backfill : TestM Unit := do
 def nameTaken : TestM Unit := do
   let (world, net) ← newNet 1 ["alice"]
   let (ok, _) ← (do
-    feed 0 (.create "fu")
+    feed 0 (.create "fu" none)
     discard <| runUntil world fun n => joined n 0 "fu"
-    feed 0 (.join "fu")
-    feed 0 (.create "fu")
+    feed 0 (.join "fu" none)
+    feed 0 (.create "fu" none)
     let n ← get
     return n.cores[0]!.state.chats.length == 1 &&
       noticed n 0 "fu" "you already have a group called fu: to join" &&
@@ -258,6 +275,7 @@ def tests : TestM Unit := do
   persistState
   nameTaken
   twoMembers
+  ownNames
   threeMembers
   removeAndLeave
   rename
