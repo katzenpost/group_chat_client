@@ -2,19 +2,19 @@ import Lake
 open Lake DSL System
 
 package group_chat_client where
-  version := v!"0.1.0"
+  version := v!"0.2.0"
   leanOptions := #[⟨`autoImplicit, false⟩, ⟨`relaxedAutoImplicit, false⟩]
 
-require Logger from git "https://github.com/katzenpost/Logger.git" @ "61f4fc02ffa00401d59d98f25feda499f26b10e2"
+require Logger from git "https://github.com/katzenpost/Logger.git" @ "51313822f6db9ff091f3b2a3e6298e1066ebea5d"
 
-require thinclient from git "https://github.com/katzenpost/thin_client.git" @ "cbc2272c156bbe67cbc6b996677811baff3eb404"
+require thinclient from git "https://github.com/katzenpost/thin_client.git" @ "8a474dee211cea6cbc7539e5793e4aeef13d7eb5"
 
-require lean_unix_socket from git "https://github.com/katzenpost/lean_unix_socket.git" @ "4bbfd6bb9df6bc9ce0d31252afff86d48683c9f2"
+require lean_unix_socket from git "https://github.com/katzenpost/lean_unix_socket.git" @ "4928d11994868397da22399e14098a99449f4544"
 
-require lean_os from git "https://github.com/katzenpost/lean_os.git" @ "a670fce328f040544c421b6318a2808af96a8499"
+require lean_os from git "https://github.com/katzenpost/lean_os.git" @ "20644b504bcc91d26b52cefd99a0de05155fb446"
 
 -- Last, so that its pin wins over the older ones its dependents carry.
-require cryptlib from git "https://github.com/katzenpost/cryptlib.git" @ "6f651738d26db5ac18dd5670bf501cfc63723175"
+require cryptlib from git "https://github.com/katzenpost/cryptlib.git" @ "v0.2.0"
 
 @[default_target]
 lean_lib GroupChatClient where

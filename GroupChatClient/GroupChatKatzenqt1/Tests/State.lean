@@ -52,6 +52,22 @@ def tests : TestM Unit := do
     | t => t
   check "a chat saved before it kept our name loads, with none"
     ((ofTerm oldChat : Option Chat).any fun c => c.me.isNone && c.name == "g")
+  let stamped : Message := { content := some bob, membershipHash := some bob }
+  check "a message saves and loads with its membership hash"
+    ((ofTerm (toTerm stamped) : Option Message).any (·.membershipHash == some bob))
+  let oldMessage := match toTerm stamped with
+    | .TList fs => Cborg.Term.TList (fs.extract 0 5)
+    | t => t
+  check "a message saved before membership hashes were kept loads, with none"
+    ((ofTerm oldMessage : Option Message).any fun m => m.membershipHash.isNone && m.content == some bob)
+  let written : Group := { readCap := bob, allocates := false }
+  check "a group whose client writes saves and loads so"
+    ((ofTerm (toTerm written) : Option Group).any (!·.allocates))
+  let oldGroup := match toTerm written with
+    | .TList fs => Cborg.Term.TList (fs.extract 0 19)
+    | t => t
+  check "a group saved before allocates was kept loads allocating, as it did"
+    ((ofTerm oldGroup : Option Group).any fun g => g.allocates && g.readCap == bob)
   -- Stamping.
   let core : Core := { present := .plain, state := { me := "alice" }, now := 1000 }
   let (core, _) := step core (.create "g" none)
