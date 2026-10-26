@@ -40,10 +40,11 @@ instance : Persist Introduction where
 
 instance : Persist Message where
   toTerm m := .TList #[toTerm m.content, toTerm m.introduction, toTerm m.numbers,
-    toTerm m.introducedAt, toTerm m.acks]
+    toTerm m.introducedAt, toTerm m.acks, toTerm m.membershipHash]
   ofTerm t := do
-    let fs ← fieldsOf t 5
-    some ⟨← fieldAt fs 0, ← fieldAt fs 1, ← fieldAt fs 2, ← fieldAt fs 3, ← fieldAt fs 4⟩
+    let fs ← (fieldsOf t 6).orElse fun _ => fieldsOf t 5
+    some ⟨← fieldAt fs 0, ← fieldAt fs 1, ← fieldAt fs 2, ← fieldAt fs 3, ← fieldAt fs 4,
+      ← fieldAt fs 5⟩
 
 instance : Persist Payload where
   toTerm
@@ -111,12 +112,14 @@ instance : Persist Group where
     toTerm g.readers, toTerm g.sent, toTerm g.ledger, toTerm g.epoch, toTerm g.pool,
     toTerm g.tip, toTerm g.deriving_, toTerm g.outbox, toTerm g.pending, toTerm g.tokens,
     toTerm g.unnumbered, toTerm g.introducedAt, toTerm g.joinedThrough, toTerm g.awaitingStart,
-    toTerm g.received]
+    toTerm g.received, toTerm g.allocates]
   ofTerm t := do
-    let fs ← fieldsOf t 19
+    let fs ← (fieldsOf t 20).orElse fun _ => fieldsOf t 19
+    -- A group saved before `allocates` was kept allocated from its own pool, as it still does.
+    let allocates ← if fs.size = 20 then fieldAt fs 19 else some true
     some ⟨← fieldAt fs 0, ← fieldAt fs 1, ← fieldAt fs 2, ← fieldAt fs 3, ← fieldAt fs 4,
       ← fieldAt fs 5, ← fieldAt fs 6, ← fieldAt fs 7, ← fieldAt fs 8, ← fieldAt fs 9,
       ← fieldAt fs 10, ← fieldAt fs 11, ← fieldAt fs 12, ← fieldAt fs 13, ← fieldAt fs 14,
-      ← fieldAt fs 15, ← fieldAt fs 16, ← fieldAt fs 17, ← fieldAt fs 18⟩
+      ← fieldAt fs 15, ← fieldAt fs 16, ← fieldAt fs 17, allocates, ← fieldAt fs 18⟩
 
 end GroupChatClient.GroupChatKatzenqt1.Persist
