@@ -1,0 +1,39 @@
+# Members on wire version 3 write every message in the map form, mint the long voucher, a CBOR
+# map, and so get the map form of the reply, unframed, in box 1 alone.
+
+wire-version alice 3
+wire-version bob 3
+create alice g
+join bob g
+run
+invite alice g bob
+run
+voucher-form bob
+----
+map
+
+reply-boxes bob
+----
+box 1: map 231 bytes
+
+send alice g hello bob
+send bob g hello alice
+run
+send bob g read you
+run
+show alice g
+----
+— a new group: adding a member's voucher code adds them
+— reading the voucher
+— added ~bob: they now read everything said in this group
+alice ✓✓: hello bob
+bob: hello alice
+bob: read you
+
+forms alice g
+----
+map
+
+forms bob g
+----
+map

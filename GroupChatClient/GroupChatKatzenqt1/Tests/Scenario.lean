@@ -33,6 +33,9 @@ held asks and hears nothing until it is released.
 | `fail-writes N` | the next N box writes fail |
 | `box-size N` | boxes hold N bytes of plaintext, for every member from now on |
 | `map-vouchers` | vouchers minted from now on are the version 3 form, a CBOR map |
+| `wire-version WHO N` | WHO writes and mints version N (3 or 4) from now on |
+| `forms WHO GROUP` | the forms of the messages WHO wrote to the group: `map`, `array` |
+| `voucher-form NEW` | the form of the voucher NEW was invited with: `map` or `compact` |
 | `reply-boxes NEW` | the boxes written after box 0 of NEW's voucher stream: each one's tag and size |
 | `fail-next WHO KIND` | WHO's next action of KIND (`Write`, `Mint`, …) fails as the network fails it |
 | `show WHO GROUP` | WHO's conversation: notices after `—`, messages after their sender, ours with `…`, `✓` or `✓✓` |
@@ -124,7 +127,7 @@ def failing : Backend where
   nextIndex _ := injected
   replicaEpoch := injected
   maxPlaintext := injected
-  voucherMint _ _ := injected
+  voucherMint _ _ _ := injected
   voucherDeriveStream _ := injected
   voucherInduct _ _ _ := injected
   voucherOpen _ _ _ := injected
@@ -290,6 +293,23 @@ def command (words : List String) : ScM (List String) := do
     set { w with boxSize := size, members := w.members.map fun (m : Member) => { m with core := { m.core with maxPlaintext := size } } }
     return []
   | ["map-vouchers"] => (← get).sim.modify fun s => { s with mapVouchers := true }; return []
+  | ["wire-version", w, n] =>
+    let i ← who w
+    modify fun s => { s with members := s.members.modify i fun m => { m with core := { m.core with wireVersion := n.toNat! } } }
+    return []
+  | ["forms", w, g] =>
+    let some c ← chatOf (← who w) g | return ["no such group"]
+    let key := (keyOf (readCapOf c.writeCap)).data.toList
+    let forms := (← (← get).sim.get).writes.toList.filterMap fun (k, _, b) =>
+      if k != key || b.size < 2 || b[0]! != 'F'.toNat.toUInt8 then none
+      else if b[1]! / 32 == 5 then some "map" else if b[1]! / 32 == 4 then some "array" else some "?"
+    return [" ".intercalate (forms.eraseDups.mergeSort (· ≤ ·))]
+  | ["voucher-form", new] =>
+    let some v := (← get).vouchers.lookup new | return [s!"{new} has not been invited"]
+    let box0 := (← (← get).sim.get).writes.toList.find? fun (k, n, _) => k == v.data.toList && n == 0
+    return [match box0 with
+      | some (_, _, b) => if mapForm b then "map" else "compact"
+      | none => "none"]
   | ["reply-boxes", new] =>
     let some v := (← get).vouchers.lookup new | return [s!"{new} has not been invited"]
     let boxes := (← (← get).sim.get).writes.toList.filterMap fun (key, n, b) =>

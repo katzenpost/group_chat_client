@@ -7,7 +7,7 @@ package group_chat_client where
 
 require Logger from git "https://github.com/katzenpost/Logger.git" @ "51313822f6db9ff091f3b2a3e6298e1066ebea5d"
 
-require thinclient from git "https://github.com/katzenpost/thin_client.git" @ "985dc6a9188efad36ccdb020547b73fb7d43b23f"
+require thinclient from git "https://github.com/katzenpost/thin_client.git" @ "98ff985ad348156eccbe7d3f4c4849a47041f2d3"
 
 require lean_unix_socket from git "https://github.com/katzenpost/lean_unix_socket.git" @ "v0.1.0"
 

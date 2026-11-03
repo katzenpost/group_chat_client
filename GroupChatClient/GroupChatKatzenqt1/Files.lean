@@ -59,9 +59,10 @@ def fileOf (g : Gcm.Gcm) : Option FileUpload := do
   if g.msgType ≠ Gcm.MsgType.fileUpload then none
   decodeUpload (← g.other.lookup "file_upload")
 
-/-- A file, as a member's content. -/
-def fileContent (membershipHash : ByteArray) (f : FileUpload) : ByteArray :=
-  Gcm.encode { version := Gcm.currentVersion, membershipHash, msgType := Gcm.MsgType.fileUpload,
+/-- A file, as a member's content, in `version`. -/
+def fileContent (membershipHash : ByteArray) (f : FileUpload) (version : Nat := Gcm.currentVersion) :
+    ByteArray :=
+  Gcm.encode { version, membershipHash, msgType := Gcm.MsgType.fileUpload,
                other := [("file_upload", encodeUpload f)] }
 
 /-- A name from elsewhere as a file may be called here: printable ASCII from katzenqt's list, no

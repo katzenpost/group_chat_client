@@ -53,8 +53,7 @@ def encoding : TestM Unit := do
   let back := (Gcm.decode content).bind Files.fileOf
   check "a file reads back from its message" (back.any fun b =>
     b.payload.data == f.payload.data && b.filetype == "image/png" && b.basename == "cat.png")
-  let old := Gcm.encode { version := Gcm.mapVersion, membershipHash := bytesOf 32,
-                          msgType := Gcm.MsgType.fileUpload, other := [("file_upload", Files.encodeUpload f)] }
+  let old := Files.fileContent (bytesOf 32) f Gcm.mapVersion
   check "a version 4 message is an array, a version 3 one a map" (content[0]! / 32 == 4 && old[0]! / 32 == 5)
   for (form, msg) in [("array", content), ("map", old)] do
     check s!"the file's bytes are found in the {form} form" (Files.payloadSpan msg).isSome

@@ -35,7 +35,8 @@ structure Opened where
 
 /-- Each call throws on failure; a caller that must succeed retries. -/
 structure Backend extends Pigeonhole.Backend where
-  voucherMint : (writeCap : ByteArray) → (name : String) → IO Minted
+  /-- `long`, the version 3 form of the payload, a CBOR map; else the compact form. -/
+  voucherMint : (writeCap : ByteArray) → (name : String) → (long : Bool) → IO Minted
   /-- The voucher stream's write and read caps. -/
   voucherDeriveStream : (voucher : ByteArray) → IO (ByteArray × ByteArray)
   voucherInduct : (voucher payload whoReply : ByteArray) → IO Inducted

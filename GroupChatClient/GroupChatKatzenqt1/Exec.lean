@@ -121,8 +121,8 @@ def perform (b : Backend) (st : Store) (a : Action) : IO Outcome := do
       return .done (.walked chat stream target skipped steps)
     | .derive chat stream start count =>
       return .done (.derived chat stream (← deriveWith b.nextIndex start count))
-    | .mint chat wc name =>
-      let m ← b.voucherMint wc name
+    | .mint chat wc name long =>
+      let m ← b.voucherMint wc name long
       let box1 ← publish b.toBackend m.writeCap (startOfWriteCap m.writeCap) m.payload
       return .done (.minted chat m box1)
     | .awaitReply chat sk vrc box1 wc framed =>

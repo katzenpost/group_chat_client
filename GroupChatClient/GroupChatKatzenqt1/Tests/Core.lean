@@ -232,7 +232,7 @@ def framedReply : TestM Unit := do
   let i : Inducted := { name := "bob", mutatedReadCap := .empty, sealedReply := reply }
   let run (a : Action) : IO Outcome := do pure (← Store.withMemory [] (perform b · a)).1
   let mint : IO (Minted × Pigeonhole.Index) := do
-    match ← run (.mint "g" (← b.newKeypair).writeCap "bob") with
+    match ← run (.mint "g" (← b.newKeypair).writeCap "bob" false) with
     | .done (.minted _ m box1) => pure (m, box1)
     | _ => throw (IO.userError "no voucher")
   let published (o : Outcome) := match o with | .done (.inducted ..) => true | _ => false
