@@ -44,6 +44,13 @@ def tests : TestM Unit := do
   let oldIBack : Option Inducting := ofTerm oldI
   check "an induction saved before sealed replies were kept loads, with none" (oldIBack.any fun b =>
     b.sealed.isNone && b.voucher.data == bob.data)
+  let j : Joining := .awaiting "code" bob bob bob false
+  let form : Joining → Bool | .awaiting _ _ _ _ m => m | .minting => false
+  check "a joiner saves and loads with its voucher's form" ((ofTerm (toTerm j) : Option Joining).any (!form ·))
+  let oldJ := match toTerm j with
+    | .TList fs => Cborg.Term.TList (fs.extract 0 5)
+    | t => t
+  check "one saved before vouchers had two forms is the map form" ((ofTerm oldJ : Option Joining).any form)
   let named : Chat := { name := "g", me := some "Ali" }
   check "a chat saves and loads with our name in it"
     ((ofTerm (toTerm named) : Option Chat).any (·.me == some "Ali"))

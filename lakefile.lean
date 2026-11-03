@@ -14,7 +14,7 @@ require lean_unix_socket from git "https://github.com/katzenpost/lean_unix_socke
 require lean_os from git "https://github.com/katzenpost/lean_os.git" @ "v0.1.0"
 
 -- Last, so that its pin wins over the older ones its dependents carry.
-require cryptlib from git "https://github.com/katzenpost/cryptlib.git" @ "v0.2.0"
+require cryptlib from git "https://github.com/katzenpost/cryptlib.git" @ "6d8c31e81fc187f24c80257f5a96689d3ba0fc5e"
 
 @[default_target]
 lean_lib GroupChatClient where

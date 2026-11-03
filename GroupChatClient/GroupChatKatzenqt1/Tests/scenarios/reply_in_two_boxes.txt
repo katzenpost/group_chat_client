@@ -1,0 +1,36 @@
+# With boxes of 400 bytes, the reply to Carol's voucher, naming Alice and Bob with their rosters,
+# does not fit one box: it goes framed over boxes 1 and 2 of the voucher stream, a `C` piece then
+# an `F` piece. Bob's reply, naming Alice alone, fits box 1.
+
+box-size 400
+create alice g
+join bob g
+run
+invite alice g bob
+run
+reply-boxes bob
+----
+box 1: F 156 bytes
+
+join carol g
+run
+invite alice g carol
+run
+reply-boxes carol
+----
+box 1: C 400 bytes
+box 2: F 13 bytes
+
+members carol g
+----
+alice bob
+
+send carol g hello all
+run
+show bob g
+----
+— minting a voucher
+— give the voucher code to a member of the group (it is also in voucher-g.txt)
+— joined the group
+— ~alice added ~carol
+carol: hello all

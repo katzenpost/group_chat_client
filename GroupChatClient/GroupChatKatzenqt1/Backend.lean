@@ -20,6 +20,10 @@ structure Minted where
   readCap : ByteArray
   secretKey : ByteArray
 
+/-- Whether a voucher payload is the version 3 form, a CBOR map: answered with the map form of
+the reply, unframed, in box 1 alone. Any other form is answered framed over boxes 1 on. -/
+def mapForm (payload : ByteArray) : Bool := payload[0]?.any fun b => b.toNat / 32 == 5
+
 structure Inducted where
   name : String
   mutatedReadCap : ByteArray

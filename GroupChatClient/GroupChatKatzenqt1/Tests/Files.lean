@@ -53,9 +53,14 @@ def encoding : TestM Unit := do
   let back := (Gcm.decode content).bind Files.fileOf
   check "a file reads back from its message" (back.any fun b =>
     b.payload.data == f.payload.data && b.filetype == "image/png" && b.basename == "cat.png")
-  let (without, payload) := (Files.takePayload content).getD (.empty, .empty)
-  check "a file's bytes come out of its message" (payload.data == f.payload.data && without.size < 200)
-  check "and go back in" ((Files.putPayload without payload).map (·.data) == some content.data)
+  let old := Gcm.encode { version := Gcm.mapVersion, membershipHash := bytesOf 32,
+                          msgType := Gcm.MsgType.fileUpload, other := [("file_upload", Files.encodeUpload f)] }
+  check "a version 4 message is an array, a version 3 one a map" (content[0]! / 32 == 4 && old[0]! / 32 == 5)
+  for (form, msg) in [("array", content), ("map", old)] do
+    check s!"the file's bytes are found in the {form} form" (Files.payloadSpan msg).isSome
+    let (without, payload) := (Files.takePayload msg).getD (.empty, .empty)
+    check s!"a file's bytes come out of the {form} form" (payload.data == f.payload.data && without.size < 200)
+    check s!"and go back into the {form} form" ((Files.putPayload without payload).map (·.data) == some msg.data)
   check "a message without a file has no bytes to take" (Files.takePayload (Gcm.textContent (bytesOf 32) "hi")).isNone
   checkEq "a name is made safe" "_.._etc_passwd" (Files.safeName "../../etc/passwd")
   checkEq "an empty name" "unnamed" (Files.safeName "")

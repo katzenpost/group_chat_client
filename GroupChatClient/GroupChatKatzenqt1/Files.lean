@@ -7,7 +7,8 @@ import Cryptlib.Protocols.GroupComm.GroupChatKatzenqt1.Member.Gcm
 
 /-! # Files, and messages too long for a box
 
-A file travels as katzenqt's `file_upload`: a map of its bytes, its type and its name. A message
+A file travels as katzenqt's `file_upload`: its bytes, its type and its name, a map in the version
+3 message and the array `[payload, filetype, basename]` in the version 4 one. A message
 too long for one box is written to a substream of its own, `C` chunks then an `F` chunk, and our
 stream gets an `I` box: the number of chunks, four bytes big-endian, then the substream's read
 cap. -/
@@ -135,10 +136,22 @@ def lookupAt (b : ByteArray) (pos : Nat) (key : String) : Option Nat := do
       if name = key then some value else go k (← skipAt b (b.size + 1) value)
   go n at_
 
-/-- Where the file's bytes are in a message: the payload item's start and end. -/
+/-- The `i`th element of the array at `pos`: where it begins. -/
+def elementAt (b : ByteArray) (pos i : Nat) : Option Nat := do
+  let (major, n, at_) ← headerAt b pos
+  if major ≠ 4 || i ≥ n then none
+  (List.range i).foldlM (fun p _ => skipAt b (b.size + 1) p) at_
+
+/-- Where the file's bytes are in a message: the payload item's start and end. In the map form
+it is `file_upload`'s `payload`; in the array form, the first element of the body, element 3,
+of a message of type 2. -/
 def payloadSpan (cbor : ByteArray) : Option (Nat × Nat) := do
-  let upload ← lookupAt cbor 0 "file_upload"
-  let start ← lookupAt cbor upload "payload"
+  let (major, _, _) ← headerAt cbor 0
+  let start ← if major = 5 then lookupAt cbor (← lookupAt cbor 0 "file_upload") "payload"
+    else do
+      let (m, t, _) ← headerAt cbor (← elementAt cbor 0 2)
+      if m ≠ 0 || t ≠ Gcm.MsgType.fileUpload then none
+      elementAt cbor (← elementAt cbor 0 3) 0
   let (major, _, _) ← headerAt cbor start
   if major ≠ 2 then none
   return (start, ← skipAt cbor 1 start)

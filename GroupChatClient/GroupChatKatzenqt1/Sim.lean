@@ -23,9 +23,11 @@ def backend (world : IO.Ref World) : Backend :=
       let voucher ← randomKey
       let (vwc, vrc) := capsOf voucher
       let payload := name.toUTF8.push 0 ++ readCapOf wc
+      let payload := if (← world.get).mapVouchers then ByteArray.mk #[0xA0] ++ payload else payload
       pure { voucher, payload, writeCap := vwc, readCap := vrc, secretKey := voucher }
     voucherDeriveStream := fun voucher => pure (capsOf voucher)
     voucherInduct := fun _ payload whoReply => do
+      let payload := if mapForm payload then payload.extract 1 payload.size else payload
       let some nul := payload.data.toList.idxOf? 0 | throw (IO.userError "sim: bad payload")
       let name := String.fromUTF8! (payload.extract 0 nul)
       pure { name, mutatedReadCap := payload.extract (nul + 1) payload.size,
