@@ -42,6 +42,11 @@ inductive ReadOutcome
   | tombstone (next : Index)
   deriving Inhabited
 
+/-- What `writeBox` throws for a box already holding other bytes. -/
+def boxExists : IO.Error := .userError "box already exists"
+
+def isBoxExists (e : IO.Error) : Bool := toString e == toString boxExists
+
 structure Keypair where
   writeCap : ByteArray
   readCap : ByteArray

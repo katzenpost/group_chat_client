@@ -1,0 +1,83 @@
+# A group whose members write different wire versions: each reads the other's form. Bob on 3
+# joins Alice on 4 with a long voucher; Carol on 4 joins Bob's group on 3 with a compact one.
+
+wire-version bob 3
+create alice g
+join bob g
+run
+invite alice g bob
+run
+voucher-form bob
+----
+map
+
+reply-boxes bob
+----
+box 1: map 231 bytes
+
+send alice g hello bob
+send bob g hello alice
+run
+show alice g
+----
+— a new group: adding a member's voucher code adds them
+— reading the voucher
+— added ~bob: they now read everything said in this group
+alice ✓: hello bob
+bob: hello alice
+
+show bob g
+----
+— minting a voucher
+— give the voucher code to a member of the group (it is also in voucher-g.txt)
+— joined the group
+bob ✓: hello alice
+alice: hello bob
+
+forms alice g
+----
+array
+
+forms bob g
+----
+map
+
+create bob h
+join carol h
+run
+invite bob h carol
+run
+voucher-form carol
+----
+compact
+
+reply-boxes carol
+----
+box 1: F 154 bytes
+
+send bob h hello carol
+send carol h hello bob
+run
+show bob h
+----
+— a new group: adding a member's voucher code adds them
+— reading the voucher
+— added ~carol: they now read everything said in this group
+bob ✓: hello carol
+carol: hello bob
+
+show carol h
+----
+— minting a voucher
+— give the voucher code to a member of the group (it is also in voucher-h.txt)
+— joined the group
+carol ✓: hello bob
+bob: hello carol
+
+forms bob h
+----
+map
+
+forms carol h
+----
+array

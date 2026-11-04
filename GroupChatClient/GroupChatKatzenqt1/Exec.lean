@@ -18,7 +18,7 @@ namespace GroupChatClient.GroupChatKatzenqt1
 
 open Cryptlib.Protocols.GroupComm.Common
 open Cryptlib.Protocols.GroupComm.GroupChatKatzenqt1.Member
-open GroupChatClient.Pigeonhole (publish retryMs startOfWriteCap)
+open GroupChatClient.Pigeonhole (publish retryMs startOfWriteCap isBoxExists)
 
 /-- Files under the state directory, by name relative to it. -/
 structure Store where
@@ -72,10 +72,10 @@ def describe : Action → String
   | .walk chat _ start targets _ => s!"{chat}: walk from {counter start} to {targets}"
   | .derive chat _ start n => s!"{chat}: derive {n} indexes after {counter start}"
   | .mint chat .. => s!"{chat}: mint a voucher"
-  | .awaitReply chat _ _ box1 _ => s!"{chat}: wait for the voucher's reply in box {counter box1}"
+  | .awaitReply chat _ _ box1 _ _ => s!"{chat}: wait for the voucher's reply in box {counter box1}"
   | .readVoucher chat _ => s!"{chat}: read a voucher's box 0"
   | .seal chat .. => s!"{chat}: seal the reply to a voucher"
-  | .publishReply chat _ box1 _ => s!"{chat}: publish the reply to a voucher in box {counter box1}"
+  | .publishReply chat _ box1 _ _ => s!"{chat}: publish the reply to a voucher in box {counter box1}"
   | .file chat _ bytes => s!"{chat}: {(bytes.map (s!"keep a file of {·.size} bytes")).getD "delete a file"}"
   | .load chat job _ => s!"{chat}: read job {job}'s message back"
   | .substream chat job => s!"{chat}: new substream for job {job}"
@@ -121,15 +121,27 @@ def perform (b : Backend) (st : Store) (a : Action) : IO Outcome := do
       return .done (.walked chat stream target skipped steps)
     | .derive chat stream start count =>
       return .done (.derived chat stream (← deriveWith b.nextIndex start count))
-    | .mint chat wc name =>
-      let m ← b.voucherMint wc name
+    | .mint chat wc name long =>
+      let m ← b.voucherMint wc name long
       let box1 ← publish b.toBackend m.writeCap (startOfWriteCap m.writeCap) m.payload
       return .done (.minted chat m box1)
-    | .awaitReply chat sk vrc box1 wc =>
-      match ← b.readBox vrc box1 with
-      | .data sealed _ => return .done (.opened chat (← b.voucherOpen sk sealed wc))
-      | .notFound => return .retry a retryMs
-      | .tombstone _ => return .done (.failed chat "the voucher's reply was withdrawn")
+    | .awaitReply chat sk vrc box1 wc framed =>
+      let mut sealed := ByteArray.empty
+      let mut index := box1
+      repeat
+        match ← b.readBox vrc index with
+        | .notFound => return .retry a retryMs
+        | .tombstone _ => return .done (.failed chat "the voucher's reply was withdrawn")
+        | .data piece next =>
+          if !framed then
+            sealed := piece
+            break
+          let tag := if piece.size = 0 then 0 else piece[0]!.toNat
+          sealed := sealed ++ piece.extract 1 piece.size
+          if tag == 'F'.toNat then break
+          if tag != 'C'.toNat then return .done (.failed chat "the voucher's reply is not framed")
+          index := next
+      return .done (.opened chat (← b.voucherOpen sk sealed wc))
     | .readVoucher chat voucher =>
       let (vwc, vrc) ← b.voucherDeriveStream voucher
       match ← b.readBox vrc (startOf vrc) with
@@ -138,9 +150,22 @@ def perform (b : Backend) (st : Store) (a : Action) : IO Outcome := do
       | .tombstone _ => return .done (.failed chat "that voucher was withdrawn")
     | .seal chat voucher payload who =>
       return .done (.sealed chat (← b.voucherInduct voucher payload who))
-    | .publishReply chat vwc box1 i =>
-      discard <| publish b.toBackend vwc box1 i.sealedReply
-      return .done (.inducted chat i)
+    | .publishReply chat vwc box1 i framed =>
+      try
+        if framed then
+          let max ← b.maxPlaintext
+          let mut index := box1
+          for n in [0:Nat.max 1 (Files.chunkCount i.sealedReply.size max)] do
+            try index ← publish b.toBackend vwc index (Files.chunk i.sealedReply max n)
+            catch e =>
+              -- A piece written before a restart is fine; box 1 taken by another's reply is not.
+              if n = 0 || !isBoxExists e then throw e
+              index ← b.nextIndex index
+        else discard <| publish b.toBackend vwc box1 i.sealedReply
+        return .done (.inducted chat i)
+      catch e =>
+        if isBoxExists e then return .done (.failed chat "another member answered that voucher")
+        throw e
     | .file chat name bytes => return .done (← keepFile st chat name bytes)
     | .load chat job name =>
       try return .done (.loaded chat job (some (← st.read name)))

@@ -223,6 +223,41 @@ def restartMidInduction : TestM Unit := do
     let (ok, _) ← (runUntil world fun n => joined n 1 "g" && noticed n 0 "g" "added ~bob").run net
     check s!"alice restarting {point} still adds bob" ok
 
+/-- The reply to a voucher, framed over boxes 1 on and read back; a piece already written after
+the first is passed over, box 1 already taken is another member's reply; unframed, box 1 alone. -/
+def framedReply : TestM Unit := do
+  let world ← IO.mkRef ({ maxPlaintext := 100 } : Sim.World)
+  let b := backend world
+  let reply := ByteArray.mk ((List.range 250).map (·.toUInt8)).toArray
+  let i : Inducted := { name := "bob", mutatedReadCap := .empty, sealedReply := reply }
+  let run (a : Action) : IO Outcome := do pure (← Store.withMemory [] (perform b · a)).1
+  let mint : IO (Minted × Pigeonhole.Index) := do
+    match ← run (.mint "g" (← b.newKeypair).writeCap "bob" false) with
+    | .done (.minted _ m box1) => pure (m, box1)
+    | _ => throw (IO.userError "no voucher")
+  let published (o : Outcome) := match o with | .done (.inducted ..) => true | _ => false
+  let opened (o : Outcome) := match o with
+    | .done (.opened _ o) => o.whoReply.data == reply.data
+    | _ => false
+  let (m, box1) ← mint
+  check "a framed reply is published" (published (← run (.publishReply "g" m.writeCap box1 i true)))
+  let boxes := ((← world.get).writes.filter fun (k, n, _) => k == m.voucher.data.toList && n ≥ 1).map
+    fun (_, n, b) => (n, b.size)
+  checkEq "in pieces of the box size, from box 1" [(1, 100), (2, 100), (3, 53)] boxes.toList
+  check "and read back whole" (opened (← run (.awaitReply "g" m.secretKey m.readCap box1 m.writeCap true)))
+  let (m, box1) ← mint
+  discard <| b.writeBox m.writeCap (← b.nextIndex box1) "other".toUTF8
+  check "a piece already written after the first is passed over"
+    (published (← run (.publishReply "g" m.writeCap box1 i true)))
+  let (m, box1) ← mint
+  discard <| b.writeBox m.writeCap box1 "other".toUTF8
+  check "box 1 already taken is another member's reply" (match ← run (.publishReply "g" m.writeCap box1 i true) with
+    | .done (.failed _ what) => what.startsWith "another member"
+    | _ => false)
+  let (m, box1) ← mint
+  check "an unframed reply is published" (published (← run (.publishReply "g" m.writeCap box1 i false)))
+  check "to box 1 alone, and read back" (opened (← run (.awaitReply "g" m.secretKey m.readCap box1 m.writeCap false)))
+
 def failingWrites : TestM Unit := do
   let (world, net) ← newNet 2 ["alice", "bob"]
   let (ok, _) ← (do
@@ -281,6 +316,7 @@ def tests : TestM Unit := do
   rename
   restart
   restartMidInduction
+  framedReply
   failingWrites
   backfill
 

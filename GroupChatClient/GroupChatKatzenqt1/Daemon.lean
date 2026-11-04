@@ -17,8 +17,8 @@ open GroupChatClient.Pigeonhole.Daemon
 
 def backend (client : Client) : Backend :=
   { Pigeonhole.Daemon.backend client with
-    voucherMint := fun wc name => runIO client do
-      let m ← voucherMint wc name
+    voucherMint := fun wc name long => runIO client do
+      let m ← voucherMint wc name (if long then voucherFormLong else voucherFormCompact)
       pure { voucher := m.voucher, payload := m.voucherPayload, writeCap := m.voucherWriteCap,
              readCap := m.voucherReadCap, secretKey := m.voucherSecretKey }
     voucherDeriveStream := fun voucher => runIO client do

@@ -83,8 +83,9 @@ structure Line where
 /-- Joining a group through a contact voucher we minted. -/
 inductive Joining
   | minting
-  /-- The voucher code to hand an existing member, and how to read its reply. -/
-  | awaiting (code : String) (secretKey voucherReadCap box1 : ByteArray)
+  /-- The voucher code to hand an existing member, and how to read its reply: unframed from box
+  1 when our payload was the map form, else framed from box 1 on. -/
+  | awaiting (code : String) (secretKey voucherReadCap box1 : ByteArray) (mapForm : Bool)
   deriving Inhabited
 
 /-- Inducting a member whose voucher we were given. Kept from the moment we are given it, so a
@@ -214,17 +215,20 @@ instance : Persist Line where
     some ⟨← fieldAt fs 0, ← fieldAt fs 1, ← fieldAt fs 2, ← fieldAt fs 3, ← fieldAt fs 4,
       ← fieldAt fs 5, ← fieldAt fs 6, ← fieldAt fs 7⟩
 
+/-- One saved before vouchers had two forms has five fields, and is the map form. -/
 instance : Persist Joining where
   toTerm
     | .minting => .TList #[toTerm (0 : Nat)]
-    | .awaiting code sk rc box1 => .TList #[toTerm (1 : Nat), toTerm code, toTerm sk, toTerm rc,
-        toTerm box1]
+    | .awaiting code sk rc box1 mapForm => .TList #[toTerm (1 : Nat), toTerm code, toTerm sk,
+        toTerm rc, toTerm box1, toTerm mapForm]
   ofTerm t := do
     let ts ← termList? t
     match ts with
     | [k] => if (← ofTerm k : Nat) = 0 then some .minting else none
     | [_, code, sk, rc, box1] =>
-      some (.awaiting (← ofTerm code) (← ofTerm sk) (← ofTerm rc) (← ofTerm box1))
+      some (.awaiting (← ofTerm code) (← ofTerm sk) (← ofTerm rc) (← ofTerm box1) true)
+    | [_, code, sk, rc, box1, mapForm] =>
+      some (.awaiting (← ofTerm code) (← ofTerm sk) (← ofTerm rc) (← ofTerm box1) (← ofTerm mapForm))
     | _ => none
 
 instance : Persist Inducted where

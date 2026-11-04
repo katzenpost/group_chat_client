@@ -46,17 +46,21 @@ inductive Action
   | walk (chat : String) (stream : Key) (start : Index) (targets : List Nat) (keep : Nat)
   /-- `derived`. -/
   | derive (chat : String) (stream : Key) (start : Index) (count : Nat)
-  /-- Mint a voucher and publish its box 0: `minted`. -/
-  | mint (chat : String) (writeCap : ByteArray) (name : String)
-  /-- Wait for the reply in box 1 and open it: `opened`. -/
+  /-- Mint a voucher, the `long` (map) form or the compact, and publish its box 0: `minted`. -/
+  | mint (chat : String) (writeCap : ByteArray) (name : String) (long : Bool)
+  /-- Wait for the reply and open it: `opened`. A `framed` reply is read from box 1 on, `C`
+  pieces then an `F` piece; an unframed one is box 1 alone. -/
   | awaitReply (chat : String) (secretKey voucherReadCap : ByteArray) (box1 : Index)
-      (writeCap : ByteArray)
+      (writeCap : ByteArray) (framed : Bool)
   /-- Read a voucher's box 0: `joinerPayload`. -/
   | readVoucher (chat : String) (voucher : ByteArray)
   /-- Seal the reply: `sealed`. -/
   | seal (chat : String) (voucher payload whoReply : ByteArray)
-  /-- Publish the sealed reply to box 1, retrying until it is written: `inducted`. -/
+  /-- Publish the sealed reply, retrying until it is written: `inducted`. `framed`, it goes in
+  pieces of a box less one byte from box 1 on, each behind `C`, the last behind `F`; unframed,
+  to box 1 alone. -/
   | publishReply (chat : String) (voucherWriteCap : ByteArray) (box1 : Index) (i : Inducted)
+      (framed : Bool)
   /-- Write `bytes` to the file `name` under the state directory, or delete it when `none`:
   `filed`. -/
   | file (chat : String) (name : String) (bytes : Option ByteArray)
@@ -195,6 +199,10 @@ structure Core where
   each line a step adds is stamped with it. -/
   now : Nat := 0
   present : Presentation
+  /-- What we write and mint: `Gcm.mapVersion`, the map forms, long vouchers and the unframed
+  reply, or `Gcm.currentVersion`, the arrays, compact vouchers and the framed reply. Both are
+  read. -/
+  wireVersion : Nat := Gcm.currentVersion
   deriving Inhabited
 
 abbrev CoreM := StateM (Core × Array Action)
@@ -212,6 +220,11 @@ def me : CoreM String := return (← get).1.state.me
 
 /-- Our name in the group: the one we gave it, or else the state's. -/
 def meIn (c : Chat) : CoreM String := return c.me.getD (← me)
+
+def version : CoreM Nat := return (← get).1.wireVersion
+
+/-- Whether we mint the long form of a voucher. -/
+def longVouchers : CoreM Bool := return (← version) == Gcm.mapVersion
 
 def modifyFlight (f : Flight → Flight) : CoreM Unit :=
   modify fun (c, as) => ({ c with flight := f c.flight }, as)
@@ -232,14 +245,18 @@ def memberCaps (g : Group) : List ByteArray := g.readCap :: g.readers.values.map
 /-- The box an outgoing message is written as. A message the member makes itself carries our
 membership hash, an `Introduction` the hash before the member it introduces; content carries the
 hash it was composed with. -/
-def boxOf (g : Group) (o : Outgoing) : Option ByteArray := do
-  let gcm ← Gcm.ofMessage o.message
+def boxOf (g : Group) (o : Outgoing) (version : Nat) : Option ByteArray := do
+  let gcm ← Gcm.ofMessage o.message version
   let gcm := if o.message.content.isSome then gcm else
     let caps := match o.message.introduction with
       | some i => (memberCaps g).filter fun c => keyOf c != keyOf i.readCap
       | none => memberCaps g
     { gcm with membershipHash := membershipHash caps }
   some (Gcm.frame (Gcm.encode gcm))
+
+/-- A text message, as a member's content, in `version`. -/
+def textContent (membershipHash : ByteArray) (s : String) (version : Nat) : ByteArray :=
+  Gcm.encode { version, membershipHash, msgType := Gcm.MsgType.text, text := some s }
 
 /-- The file under the state directory that holds the message of upload `job`. -/
 def spoolFile (c : Chat) (job : Nat) (now : Nat) : String := s!"spool/{slug c.name}-{now}-{job}.cbor"
@@ -255,7 +272,7 @@ def enqueue (c : Chat) (outgoing : List Outgoing) (content : Option ByteArray :=
   for o in outgoing do
     let some g := c.group | pure ()
     let mine := content.isSome && o.message.content.map (·.data) == content.map (·.data)
-    let box := (boxOf g o).bind fun box =>
+    let box := (boxOf g o core.wireVersion).bind fun box =>
       match payload.filter fun _ => mine with
       | some p => (Files.putPayload (box.extract 1 box.size) p).map Gcm.frame
       | none => some box
@@ -336,13 +353,14 @@ def dropLines (c : Chat) (keep : Line → Bool) : CoreM Chat := do
 
 /-- Do what the member asks. -/
 def effects (c : Chat) (es : List Effect) : CoreM Chat := do
+  let v ← version
   let mut c := c
   for e in es do
     match e with
     | .writeBox index payload =>
       let box := match payload with
         | .bytes b => some b
-        | .message m => Gcm.box m
+        | .message m => Gcm.box m v
       if let some box := box then c := rewrite c index box
     | .writeTombstone index => c := rewrite c index .empty
     | .readBox stream readCap index _ => emit (.scanRead c.name stream readCap index)
@@ -397,6 +415,10 @@ def startReads (c : Chat) : CoreM Chat := do
 
 def startWrite (c : Chat) : CoreM Chat := do
   if (← getFlight).writing.contains c.name || c.writeCap.size = 0 then return c
+  -- While a reply is sealing, nothing takes the next index: the reply names it as where the new
+  -- member starts reading, and the Introduction, queued first once the reply is sealed, must be
+  -- the box there.
+  if c.inducting.any (·.sealing) then return c
   match c.jobs with
   | [] => return c
   | j :: rest =>
@@ -405,13 +427,6 @@ def startWrite (c : Chat) : CoreM Chat := do
     modifyFlight fun f => { f with writing := c.name :: f.writing }
     emit (.write c.name j.id c.writeCap index j.box)
     return { c with jobs := { j with index := some index } :: rest }
-
-/-- Write the control message the member owes, without waiting for something to send: until a
-joiner says where it was introduced, no one can count its stream. -/
-def startControl (c : Chat) : CoreM Chat := do
-  unless c.group.any (·.owesControl) do return c
-  let (out, c) := onGroup c (Group.compose none) []
-  enqueue c out
 
 /-- Hand the new member its reply, once everything owed is written. -/
 def startInduction (c : Chat) : CoreM Chat := do
@@ -422,7 +437,9 @@ def startInduction (c : Chat) : CoreM Chat := do
   let name ← meIn c
   let who := ReplyWho.ofJoinReply (g.reply c.nextWrite) fun key =>
     if key == g.me then some name else c.names.get? key
-  emit (.seal c.name i.voucher i.payload (ReplyWho.encode who))
+  -- A joiner that minted the map form of the voucher reads only the map form of the reply.
+  let encode := if mapForm i.payload then ReplyWho.encodeMap else ReplyWho.encode
+  emit (.seal c.name i.voucher i.payload (encode who))
   return { c with inducting := some { i with sealing := true } }
 
 def blobOf (chat : String) (job : Nat) : CoreM (Option ByteArray) :=
@@ -473,7 +490,6 @@ def startDownloads (c : Chat) : CoreM Unit := do
 /-- Start whatever can start. -/
 def pump : CoreM Unit := do
   for c in (← get).1.state.chats do
-    let c ← startControl c
     let c ← startWrite c
     let c ← startReads c
     let c ← startInduction c
@@ -562,14 +578,14 @@ def handle : Msg → CoreM Unit
   | .created name joining kp => withChat name fun c => do
     let c := { c with writeCap := kp.writeCap, nextWrite := kp.first }
     if joining then
-      emit (.mint name kp.writeCap (← meIn c))
+      emit (.mint name kp.writeCap (← meIn c) (← longVouchers))
       return c.notice "minting a voucher"
     return { c with group := some (Group.found kp.readCap [kp.readCap]) }.notice
       (← get).1.present.newGroup
   | .minted name m box1 => withChat name fun c => do
     let code := Base64.encode m.voucher
-    emit (.awaitReply name m.secretKey m.readCap box1 c.writeCap)
-    return { c with joining := some (.awaiting code m.secretKey m.readCap box1) }.notice
+    emit (.awaitReply name m.secretKey m.readCap box1 c.writeCap (!mapForm m.payload))
+    return { c with joining := some (.awaiting code m.secretKey m.readCap box1 (mapForm m.payload)) }.notice
       ((← get).1.present.voucherMinted code name (voucherFile name))
   | .opened name o => withChat name fun c => do
     let joined : Option (ReplyWho.ReplyWho × Group) := do
@@ -602,19 +618,26 @@ def handle : Msg → CoreM Unit
     return { c with inducting := some { i with payload, voucherWriteCap := vwc, box1 } }
   | .sealed name s => withChat name fun c => do
     let some i := c.inducting | return c
-    emit (.publishReply name i.voucherWriteCap i.box1 s)
-    return { c with inducting := some { i with sealed := some s } }
+    let c := { c with inducting := some { i with sealing := false, sealed := some s } }
+    -- The Introduction goes ahead of anything queued while the reply was sealing, so it is the
+    -- box at the index the reply names.
+    let c ← if c.group.isSome then do
+        let waiting := c.jobs
+        let (o, c) := onGroup { c with jobs := [] } (Group.introduceNow (sanitize s.name) s.mutatedReadCap) default
+        let c ← enqueue c [o]
+        pure { c with jobs := c.jobs ++ waiting }
+      else pure c
+    emit (.publishReply name i.voucherWriteCap i.box1 s (!mapForm i.payload))
+    return c
   | .inducted name i => withChat name fun c => do
     let who := sanitize i.name
-    let (o, c) := onGroup c (Group.introduceNow who i.mutatedReadCap) default
-    let c ← if c.group.isSome then enqueue c [o] else pure c
     let c := (onGroup c (do if (← get).ledger.holding then Group.cancelInduction) ()).2
     let c := { c with inducting := none, names := c.names.set (keyOf i.mutatedReadCap) who }
     return c.notice s!"added ~{(← get).1.present.name who}: they now read everything said in this group"
   | .send name text => withChat name fun c => do
     let text := (← get).1.present.outgoing text
     let some g := c.group | return c.notice "this conversation has not been joined yet"
-    let content := Gcm.textContent (membershipHash (memberCaps g)) text
+    let content := textContent (membershipHash (memberCaps g)) text (← version)
     let (id, c) := c.say fun id => { id, sender := g.me, text, status := .pending }
     let (out, c) := onGroup c (Group.compose (some content)) []
     enqueue c out (some content) (some id)
@@ -624,7 +647,7 @@ def handle : Msg → CoreM Unit
       return c.notice s!"that file is too large to send: at most {sizeText Files.maxFile}"
     let safe := Files.safeName file
     let f : FileUpload := { payload := .empty, filetype := Files.filetypeOf safe, basename := safe }
-    let content := Files.fileContent (membershipHash (memberCaps g)) f
+    let content := Files.fileContent (membershipHash (memberCaps g)) f (← version)
     let a : Attachment := { name := safe, filetype := f.filetype, size := bytes.size,
                             file := attachmentFile c c.nextId (← get).1.now safe }
     emit (.file name a.file (some bytes))
@@ -838,7 +861,8 @@ def step (c : Core) (m : Msg) : Core × List Action :=
 /-- Begin again after a restart: whatever was under way is started afresh. An induction carries
 on from where it was: the voucher is read, the reply sealed, or the reply kept when it was sealed
 published again. -/
-def resume (present : Presentation) (s : State) (maxPlaintext : Nat) (now : Nat := 0) :
+def resume (present : Presentation) (s : State) (maxPlaintext : Nat) (now : Nat := 0)
+    (wireVersion : Nat := Gcm.currentVersion) :
     Core × List Action :=
   let go : CoreM Unit := do
     for c in s.chats do
@@ -846,18 +870,18 @@ def resume (present : Presentation) (s : State) (maxPlaintext : Nat) (now : Nat 
         Core.emit (.create c.name c.joining.isSome)
         continue
       match c.joining with
-      | some .minting => Core.emit (.mint c.name c.writeCap (← Core.meIn c))
-      | some (.awaiting _ sk rc box1) => Core.emit (.awaitReply c.name sk rc box1 c.writeCap)
+      | some .minting => Core.emit (.mint c.name c.writeCap (← Core.meIn c) (← Core.longVouchers))
+      | some (.awaiting _ sk rc box1 old) => Core.emit (.awaitReply c.name sk rc box1 c.writeCap !old)
       | none => pure ()
       match c.inducting with
-      | some { sealed := some s, voucherWriteCap, box1, .. } =>
-        Core.emit (.publishReply c.name voucherWriteCap box1 s)
+      | some { sealed := some s, voucherWriteCap, box1, payload, .. } =>
+        Core.emit (.publishReply c.name voucherWriteCap box1 s (!mapForm payload))
       | some i =>
         if i.payload.size = 0 then Core.emit (.readVoucher c.name i.voucher)
         else Core.setChat { c with inducting := some { i with sealing := false } }
       | none => pure ()
     Core.pump
-  let ((), (c, as)) := go.run ({ state := s, maxPlaintext, now, present }, #[])
+  let ((), (c, as)) := go.run ({ state := s, maxPlaintext, now, present, wireVersion }, #[])
   ({ c with state := stamp s now c.state }, as.toList)
 
 /-- Whether any member has acknowledged our line `l`. -/

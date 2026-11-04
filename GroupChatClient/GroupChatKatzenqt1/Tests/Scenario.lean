@@ -27,9 +27,16 @@ held asks and hears nothing until it is released.
 | `send WHO GROUP TEXT…` | WHO sends TEXT |
 | `remove WHO GROUP GONE`, `scan WHO GROUP`, `leave WHO GROUP` | as a member asks |
 | `run [SECONDS]` | the network runs for SECONDS of logical time, 600 by default |
-| `hold WHO`, `release WHO` | WHO's traffic stops, or goes again |
+| `hold WHO`, `release WHO` | WHO's traffic stops, or goes again; what `delay-next` kept back is handed over |
+| `delay-next WHO KIND` | what comes of WHO's next action of KIND is kept back until WHO is released |
 | `epoch` | the replicas' epoch passes, and every member is told |
 | `fail-writes N` | the next N box writes fail |
+| `box-size N` | boxes hold N bytes of plaintext, for every member from now on |
+| `map-vouchers` | vouchers minted from now on are the version 3 form, a CBOR map |
+| `wire-version WHO N` | WHO writes and mints version N (3 or 4) from now on |
+| `forms WHO GROUP` | the forms of the messages WHO wrote to the group: `map`, `array` |
+| `voucher-form NEW` | the form of the voucher NEW was invited with: `map` or `compact` |
+| `reply-boxes NEW` | the boxes written after box 0 of NEW's voucher stream: each one's tag and size |
 | `fail-next WHO KIND` | WHO's next action of KIND (`Write`, `Mint`, …) fails as the network fails it |
 | `show WHO GROUP` | WHO's conversation: notices after `—`, messages after their sender, ours with `…`, `✓` or `✓✓` |
 | `members WHO GROUP` | whom WHO reads in the group |
@@ -68,6 +75,12 @@ structure World where
   unsaved : Array String := #[]
   /-- For each member, the kind of its next action to fail. -/
   failNext : List (Nat × String) := []
+  /-- For each member, the kind of its next action whose outcome is kept back until released. -/
+  delayNext : List (Nat × String) := []
+  delayed : List (Nat × Msg) := []
+  boxSize : Nat := 1530
+  /-- Each joiner's voucher, which names its stream in the sim. -/
+  vouchers : List (String × ByteArray) := []
 
 abbrev ScM := StateT World IO
 
@@ -76,7 +89,7 @@ def who (name : String) : ScM Nat := do
   match w.members.findIdx? (·.name == name) with
   | some i => return i
   | none =>
-    set { w with members := w.members.push { name, core := { present := .plain, state := { me := name } } } }
+    set { w with members := w.members.push { name, core := { present := .plain, state := { me := name }, maxPlaintext := w.boxSize } } }
     return w.members.size
 
 def feed (i : Nat) (m : Msg) : ScM Unit := do
@@ -114,7 +127,7 @@ def failing : Backend where
   nextIndex _ := injected
   replicaEpoch := injected
   maxPlaintext := injected
-  voucherMint _ _ := injected
+  voucherMint _ _ _ := injected
   voucherDeriveStream _ := injected
   voucherInduct _ _ _ := injected
   voucherOpen _ _ _ := injected
@@ -135,7 +148,10 @@ def act : ScM Bool := do
     if fail then perform failing failingStore a else perform (Sim.backend w.sim) st a
   modify fun w => { w with files := (i, files) :: w.files.filter (·.1 != i) }
   match outcome with
-  | .done m => feed i m
+  | .done m =>
+    if (← get).delayNext.contains (i, kindOf a) then
+      modify fun w => { w with delayNext := w.delayNext.erase (i, kindOf a), delayed := w.delayed ++ [(i, m)] }
+    else feed i m
   | .retry a ms => modify fun w => { w with later := w.later.push (w.clock + ms, i, .act a) }
   | .delay m ms => modify fun w => { w with later := w.later.push (w.clock + ms, i, .msg m) }
   return true
@@ -232,6 +248,7 @@ def command (words : List String) : ScM (List String) := do
   | ["join", w, g] => feed (← who w) (.join g none); return []
   | "invite" :: w :: g :: new :: rest =>
     let some code ← codeOf (← who new) (rest.headD g) | return [s!"{new} has no voucher code"]
+    if let some v := Base64.decode code then modify fun s => { s with vouchers := (new, v) :: s.vouchers }
     feed (← who w) (.induct g code)
     return []
   | "send" :: w :: g :: text => feed (← who w) (.send g (" ".intercalate text)); return []
@@ -250,7 +267,13 @@ def command (words : List String) : ScM (List String) := do
     return []
   | ["release", w] =>
     let i ← who w
-    modify fun s => { s with held := s.held.erase i }
+    let delayed := (← get).delayed
+    modify fun s => { s with held := s.held.erase i, delayed := delayed.filter (·.1 != i) }
+    for (_, m) in delayed.filter (·.1 == i) do feed i m
+    return []
+  | ["delay-next", w, kind] =>
+    let i ← who w
+    modify fun s => { s with delayNext := (i, kind) :: s.delayNext.filter (·.1 != i) }
     return []
   | ["epoch"] =>
     let n := (← get).epoch + 1
@@ -263,6 +286,38 @@ def command (words : List String) : ScM (List String) := do
     modify fun s => { s with failNext := (i, kind) :: s.failNext.filter (·.1 != i) }
     return []
   | ["fail-writes", n] => (← get).sim.modify fun s => { s with failWrites := n.toNat! }; return []
+  | ["box-size", n] =>
+    let size := n.toNat!
+    (← get).sim.modify fun s => { s with maxPlaintext := size }
+    let w ← get
+    set { w with boxSize := size, members := w.members.map fun (m : Member) => { m with core := { m.core with maxPlaintext := size } } }
+    return []
+  | ["map-vouchers"] => (← get).sim.modify fun s => { s with mapVouchers := true }; return []
+  | ["wire-version", w, n] =>
+    let i ← who w
+    modify fun s => { s with members := s.members.modify i fun m => { m with core := { m.core with wireVersion := n.toNat! } } }
+    return []
+  | ["forms", w, g] =>
+    let some c ← chatOf (← who w) g | return ["no such group"]
+    let key := (keyOf (readCapOf c.writeCap)).data.toList
+    let forms := (← (← get).sim.get).writes.toList.filterMap fun (k, _, b) =>
+      if k != key || b.size < 2 || b[0]! != 'F'.toNat.toUInt8 then none
+      else if b[1]! / 32 == 5 then some "map" else if b[1]! / 32 == 4 then some "array" else some "?"
+    return [" ".intercalate (forms.eraseDups.mergeSort (· ≤ ·))]
+  | ["voucher-form", new] =>
+    let some v := (← get).vouchers.lookup new | return [s!"{new} has not been invited"]
+    let box0 := (← (← get).sim.get).writes.toList.find? fun (k, n, _) => k == v.data.toList && n == 0
+    return [match box0 with
+      | some (_, _, b) => if mapForm b then "map" else "compact"
+      | none => "none"]
+  | ["reply-boxes", new] =>
+    let some v := (← get).vouchers.lookup new | return [s!"{new} has not been invited"]
+    let boxes := (← (← get).sim.get).writes.toList.filterMap fun (key, n, b) =>
+      if key != v.data.toList || n == 0 then none else
+      let tag := if b.size == 0 then "empty" else if b[0]! == 'C'.toNat.toUInt8 then "C"
+        else if b[0]! == 'F'.toNat.toUInt8 then "F" else if b[0]! / 32 == 5 then "map" else "?"
+      some s!"box {n}: {tag} {b.size} bytes"
+    return boxes.eraseDups
   | ["show", w, g] => showChat (← who w) g
   | ["members", w, g] => membersOf (← who w) g
   | ["acked", w, g] => ackedOf (← who w) g

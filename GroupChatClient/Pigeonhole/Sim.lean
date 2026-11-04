@@ -28,6 +28,8 @@ structure World where
   /-- Writes to fail before one succeeds, to test retrying. -/
   failWrites : Nat := 0
   maxPlaintext : Nat := 1530
+  /-- Mint vouchers in the version 3 form, a CBOR map. -/
+  mapVouchers : Bool := false
   /-- Writes refused, each a box already holding other bytes: stream key and Idx64. -/
   refused : Array (List UInt8 × Nat) := #[]
   /-- Each box written, in order: stream key, Idx64 and bytes. -/
@@ -71,7 +73,7 @@ def backend (world : IO.Ref World) : Backend where
     | some new, some old =>
       if old.map (·.data) != some new.data then
         world.set { w with refused := w.refused.push (key, n) }
-        throw (IO.userError "sim: box already exists")
+        throw boxExists
       world.set { w with writes := w.writes.push (key, n, plaintext) }
     | _, _ => world.set stored
     pure (indexOf ⟨key.toArray⟩ (n + 1))

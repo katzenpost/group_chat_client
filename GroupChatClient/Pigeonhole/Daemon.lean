@@ -25,6 +25,7 @@ def fixed {n : Nat} (what : String) (b : ByteArray) : ClientM (FixedBytes n) :=
 def runIO {α : Type} (client : Client) (x : ClientM α) : IO α := do
   match ← (run client x).block with
   | .ok a => pure a
+  | .error (.replica .boxAlreadyExists) => throw boxExists
   | .error e => throw (IO.userError (toString e))
 
 /-- The replica epoch most storage replicas are in: each publishes envelope keys up to the epoch

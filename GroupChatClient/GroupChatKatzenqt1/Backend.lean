@@ -20,6 +20,10 @@ structure Minted where
   readCap : ByteArray
   secretKey : ByteArray
 
+/-- Whether a voucher payload is the version 3 form, a CBOR map: answered with the map form of
+the reply, unframed, in box 1 alone. Any other form is answered framed over boxes 1 on. -/
+def mapForm (payload : ByteArray) : Bool := payload[0]?.any fun b => b.toNat / 32 == 5
+
 structure Inducted where
   name : String
   mutatedReadCap : ByteArray
@@ -31,7 +35,8 @@ structure Opened where
 
 /-- Each call throws on failure; a caller that must succeed retries. -/
 structure Backend extends Pigeonhole.Backend where
-  voucherMint : (writeCap : ByteArray) → (name : String) → IO Minted
+  /-- `long`, the version 3 form of the payload, a CBOR map; else the compact form. -/
+  voucherMint : (writeCap : ByteArray) → (name : String) → (long : Bool) → IO Minted
   /-- The voucher stream's write and read caps. -/
   voucherDeriveStream : (voucher : ByteArray) → IO (ByteArray × ByteArray)
   voucherInduct : (voucher payload whoReply : ByteArray) → IO Inducted

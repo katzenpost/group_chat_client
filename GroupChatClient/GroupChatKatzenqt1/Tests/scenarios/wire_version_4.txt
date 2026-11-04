@@ -1,0 +1,35 @@
+# Members on wire version 4, the default, write arrays, mint the compact voucher and get the reply
+# framed from box 1 on.
+
+wire-version alice 4
+create alice g
+join bob g
+run
+invite alice g bob
+run
+voucher-form bob
+----
+compact
+
+reply-boxes bob
+----
+box 1: F 156 bytes
+
+send alice g hello bob
+send bob g hello alice
+run
+show bob g
+----
+— minting a voucher
+— give the voucher code to a member of the group (it is also in voucher-g.txt)
+— joined the group
+bob ✓: hello alice
+alice: hello bob
+
+forms alice g
+----
+array
+
+forms bob g
+----
+array
